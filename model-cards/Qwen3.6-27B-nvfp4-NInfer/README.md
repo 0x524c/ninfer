@@ -3,17 +3,22 @@ library_name: ninfer
 pipeline_tag: image-text-to-text
 inference: false
 license: apache-2.0
-base_model: Qwen/Qwen3.6-27B
+base_model:
+  - Qwen/Qwen3.6-27B
+  - rdtand/Qwen3.6-27B-PrismaSCOUT-Blackwell-NVFP4-BF16-vllm
 base_model_relation: quantized
 tags:
   - ninfer
   - qwen3.6
+  - nvfp4
+  - w4a4
+  - blackwell
   - multimodal
   - conversational
   - cuda
   - rtx-5090
 model-index:
-  - name: Qwen3.6-27B-NInfer
+  - name: Qwen3.6-27B-nvfp4-NInfer
     results:
       - task:
           type: text-generation
@@ -23,7 +28,7 @@ model-index:
           type: aime25
         metrics:
           - type: accuracy
-            value: 86.67
+            value: 93.33
             name: Accuracy (0-shot, rule)
         source:
           url: https://github.com/Neroued/ninfer/tree/master/eval
@@ -36,7 +41,7 @@ model-index:
           type: aime26
         metrics:
           - type: accuracy
-            value: 93.33
+            value: 90.00
             name: Accuracy (0-shot, rule)
         source:
           url: https://github.com/Neroued/ninfer/tree/master/eval
@@ -49,50 +54,61 @@ model-index:
           type: gpqa_diamond
         metrics:
           - type: accuracy
-            value: 86.87
+            value: 85.86
             name: Accuracy (0-shot, rule)
         source:
           url: https://github.com/Neroued/ninfer/tree/master/eval
           name: NInfer EvalScope 1.9.0
 ---
 
-# Qwen3.6-27B for NInfer
+# Qwen3.6-27B NVFP4 for NInfer
 
 This model card is the version-controlled source for
-[neroued/Qwen3.6-27B-NInfer](https://huggingface.co/neroued/Qwen3.6-27B-NInfer).
+[neroued/Qwen3.6-27B-nvfp4-NInfer](https://huggingface.co/neroued/Qwen3.6-27B-nvfp4-NInfer).
 
-The repository contains
-[Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) converted to the native
-[NInfer](https://github.com/Neroued/ninfer) `.ninfer` artifact format. The artifact is intended
-only for NInfer; it is not a Transformers checkpoint, Safetensors distribution, or GGUF file.
+The repository contains the NVFP4 weight profile of
+[Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B), converted from the fixed packed weights in
+[rdtand/Qwen3.6-27B-PrismaSCOUT-Blackwell-NVFP4-BF16-vllm](https://huggingface.co/rdtand/Qwen3.6-27B-PrismaSCOUT-Blackwell-NVFP4-BF16-vllm)
+to the native [NInfer](https://github.com/Neroued/ninfer) `.ninfer` artifact format. The artifact is
+intended only for NInfer; it is not a Transformers checkpoint, Safetensors distribution, or GGUF
+file.
+
+This is a second weight profile for the existing `qwen3_6_27b` target, not a separate model target.
+The version-2 artifact identity selects the NVFP4 binder and execution leaves. NInfer uses W4A4
+Tensor Core MMA for prefill and A16 NVFP4 kernels for decode while retaining the same Text, Vision,
+MTP, prefix-reuse, CLI, and serving paths as the groupwise-int profile.
 
 ## Artifact
 
 | Field | Value |
 |---|---|
-| Filename | `qwen3_6_27b.ninfer` |
-| Size | 17,495,365,888 bytes (16.29 GiB) |
-| SHA-256 | `7b51600ffd10632b9660f56085efdd9b751d79733ad32036a652234b64bebe7b` |
+| Filename | `qwen3_6_27b_nvfp4.ninfer` |
+| Size | 17,608,902,400 bytes (16.40 GiB) |
+| SHA-256 | `886144e76f3ab8a132555e40b7182af187d7a9aeab5cff56b41d7c6e43fb91e1` |
 | Container version | 2 |
 | NInfer model ID | `qwen3.6-27b` |
-| NInfer weights ID | `groupwise-int` |
+| NInfer weights ID | `nvfp4` |
 | NInfer target key | `qwen3_6_27b` |
+| Stored objects | 1,307 (1,301 tensors and 6 resources) |
+| NVFP4 tensors | 247 |
 
 The file contains the registered Text, Vision, MTP, proposal-head, tokenizer, chat-template,
-generation, and media-processor objects required by NInfer.
+generation, and media-processor objects required by NInfer. Text linears use the source repository's
+fixed mixed NVFP4/BF16 allocation; Vision, MTP, and frontend resources retain their registered
+NInfer formats.
 
 Verify a downloaded file with:
 
 ```bash
 printf '%s  %s\n' \
-  '7b51600ffd10632b9660f56085efdd9b751d79733ad32036a652234b64bebe7b' \
-  'qwen3_6_27b.ninfer' | sha256sum --check
+  '886144e76f3ab8a132555e40b7182af187d7a9aeab5cff56b41d7c6e43fb91e1' \
+  'qwen3_6_27b_nvfp4.ninfer' | sha256sum --check
 ```
 
 ## Requirements
 
 - [NInfer](https://github.com/Neroued/ninfer) revision
-  [`bd265a3`](https://github.com/Neroued/ninfer/commit/bd265a36fe990475bae143d2073d6a6cf67d0da3)
+  [`2140dda`](https://github.com/Neroued/ninfer/commit/2140dda4b63f31bf7024cdf094784ac3904274ef)
   or later, built from source;
 - 64-bit Linux;
 - NVIDIA GeForce RTX 5090 (`sm_120a`);
@@ -104,11 +120,11 @@ NInfer does not provide an install target or packaged binary. See the
 ## Download and run
 
 ```bash
-hf download neroued/Qwen3.6-27B-NInfer \
-  qwen3_6_27b.ninfer \
+hf download neroued/Qwen3.6-27B-nvfp4-NInfer \
+  qwen3_6_27b_nvfp4.ninfer \
   --local-dir models
 
-./build/apps/ninfer models/qwen3_6_27b.ninfer \
+./build/apps/ninfer models/qwen3_6_27b_nvfp4.ninfer \
   --prompt "Explain prefill and decode in three sentences." \
   --max-context 16384 \
   --max-new 256 \
@@ -134,19 +150,22 @@ The artifact supports:
 ## Performance
 
 The following single-GPU serving measurements were collected on an NVIDIA GeForce RTX 5090 with
-CUDA 13.1. Requests were submitted serially to a persistent `ninfer-serve` process with CUDA Graph
-enabled, a 1,024-token prefill chunk, INT8 group-64 KV cache, and prefix reuse disabled. Each value
-is the arithmetic mean ± sample standard deviation over five fixed seeds; warm-up requests are
-excluded. These results use `weights_id = groupwise-int`.
+CUDA 13.1 compile/runtime and CUDA driver API 13.3. Requests were submitted serially to a persistent
+`ninfer-serve` process with CUDA Graph enabled, a 1,024-token prefill chunk, INT8 group-64 KV cache,
+and prefix reuse disabled. Each value is the arithmetic mean ± sample standard deviation over five
+fixed seeds; warm-up requests are excluded.
 
 ### Long-context baseline (MTP disabled)
 
 | Prompt tokens | Prefill tok/s | Server TTFT (ms) | Decode tok/s |
 |---:|---:|---:|---:|
-| 7,680 | 3,218.1 ± 4.3 | 2,392.4 ± 3.0 | 77.6 ± 0.1 |
-| 64,512 | 2,655.9 ± 2.9 | 24,335.7 ± 25.2 | 70.7 ± 0.1 |
-| 130,048 | 2,185.3 ± 0.3 | 59,590.3 ± 8.9 | 64.5 ± 0.1 |
-| 260,096 | 1,614.8 ± 0.6 | 161,221.8 ± 62.5 | 54.8 ± 0.1 |
+| 7,680 | 11,139.0 ± 24.8 | 695.8 ± 1.5 | 88.6 ± 0.2 |
+| 64,512 | 6,385.1 ± 27.1 | 10,148.8 ± 42.4 | 80.0 ± 0.3 |
+| 130,048 | 4,195.6 ± 7.2 | 31,078.7 ± 53.5 | 72.5 ± 0.1 |
+| 260,096 | 2,509.8 ± 1.1 | 103,797.3 ± 52.5 | 60.5 ± 0.2 |
+
+At 7,680 prompt tokens this is 3.46× the prefill throughput of the published groupwise-int profile;
+at 260,096 prompt tokens it is 1.55×.
 
 ### MTP=3 long-reasoning decode
 
@@ -154,9 +173,9 @@ Thinking was enabled and the output limit was 65,536 tokens.
 
 | AIME 2026 fixture | Completion tokens | Decode tok/s | MTP acceptance | MTP tokens/round |
 |---|---:|---:|---:|---:|
-| Problem 1 | 10,686.2 ± 553.8 | 175.4 ± 1.0 | 77.9% ± 0.9% | 3.34 ± 0.03 |
-| Problem 15 | 61,604.2 ± 5,677.9 | 161.9 ± 2.8 | 73.4% ± 1.7% | 3.20 ± 0.05 |
-| Problem 30 | 47,339.8 ± 9,162.2 | 172.2 ± 0.9 | 78.8% ± 0.8% | 3.36 ± 0.02 |
+| Problem 1 | 10,957.0 ± 872.9 | 219.1 ± 3.6 | 80.2% ± 2.0% | 3.41 ± 0.06 |
+| Problem 15 | 65,536.0 ± 0.0 | 201.7 ± 1.1 | 76.3% ± 0.7% | 3.29 ± 0.02 |
+| Problem 30 | 50,642.2 ± 6,772.2 | 211.8 ± 3.0 | 81.0% ± 1.1% | 3.43 ± 0.03 |
 
 ### MTP=3 cross-scenario decode
 
@@ -165,14 +184,14 @@ disabled and the output limit was 4,096 tokens.
 
 | Category | Decode tok/s | MTP acceptance | MTP tokens/round |
 |---|---:|---:|---:|
-| Code | 167.0 ± 5.4 | 72.3% ± 3.5% | 3.17 ± 0.11 |
-| Story | 112.6 ± 9.4 | 37.8% ± 5.9% | 2.13 ± 0.18 |
-| Translation | 161.5 ± 11.3 | 68.3% ± 7.2% | 3.05 ± 0.22 |
-| Structured output | 193.0 ± 18.8 | 88.7% ± 11.7% | 3.66 ± 0.35 |
+| Code | 205.4 ± 8.9 | 73.1% ± 4.7% | 3.19 ± 0.14 |
+| Story | 141.6 ± 12.8 | 39.9% ± 6.6% | 2.20 ± 0.20 |
+| Translation | 201.5 ± 10.6 | 70.4% ± 5.5% | 3.11 ± 0.16 |
+| Structured output | 240.3 ± 12.2 | 91.2% ± 6.3% | 3.74 ± 0.19 |
 
 See the
 [full methodology and results](https://github.com/Neroued/ninfer/blob/master/docs/performance.md),
-including metric definitions and the exact reproduction command.
+including metric definitions, comparison data, and the exact reproduction command.
 
 ## Evaluation
 
@@ -183,15 +202,15 @@ seed 42. All 258 configured samples completed and were scored.
 
 | Benchmark | Accuracy | Correct / total |
 |---|---:|---:|
-| AIME 2025 | 86.67% | 26 / 30 |
-| AIME 2026 | 93.33% | 28 / 30 |
-| GPQA-Diamond | 86.87% | 172 / 198 |
+| AIME 2025 | 93.33% | 28 / 30 |
+| AIME 2026 | 90.00% | 27 / 30 |
+| GPQA-Diamond | 85.86% | 170 / 198 |
 
 These are single-sample results under the stated NInfer evaluation profile, not pass@k scores.
 
 ## Limits
 
-- The artifact is accepted only by NInfer revision `bd265a3` or later and the matching registered
+- The artifact is accepted only by NInfer revision `2140dda` or later and the matching registered
   target.
 - NInfer currently executes on one RTX 5090, one CUDA device, and one active request per Engine.
 - It does not provide continuous batching, multi-GPU execution, CPU/GPU offload, or distributed
@@ -203,20 +222,25 @@ These are single-sample results under the stated NInfer evaluation profile, not 
 
 | Field | Value |
 |---|---|
-| Source repository | `Qwen/Qwen3.6-27B` |
-| Source revision | `6a9e13bd6fc8f0983b9b99948120bc37f49c13e9` |
-| Conversion recipe | `qwen3_6_27b-v2` |
+| Base repository | `Qwen/Qwen3.6-27B` |
+| Base revision | `6a9e13bd6fc8f0983b9b99948120bc37f49c13e9` |
+| NVFP4 source repository | `rdtand/Qwen3.6-27B-PrismaSCOUT-Blackwell-NVFP4-BF16-vllm` |
+| NVFP4 source revision | `9b5389d4a1e207daab2d47732efea57d7e946dcf` |
+| Conversion recipe | `qwen3_6_27b_nvfp4-v1` |
 | Converter repository | `https://github.com/Neroued/ninfer` |
-| Converter revision | `d6319426e5ef08fa95c36e75cb3ab8b18e5fb957` |
-| Minimum runtime revision | `bd265a36fe990475bae143d2073d6a6cf67d0da3` |
+| Converter revision | `c6b2ef0572c757a0a8e088a28a72d972ae3b1145` |
+| Minimum runtime revision | `2140dda4b63f31bf7024cdf094784ac3904274ef` |
+| Ranking input SHA-256 | `c692dc76388132c910547589b4fb4a0503fbd6ad50aaac6a509bbcb192a8afa5` |
 
 The artifact identity, summarized object inventory, and conversion provenance are published in
-[`artifact-manifest.json`](https://huggingface.co/neroued/Qwen3.6-27B-NInfer/blob/main/artifact-manifest.json).
+[`artifact-manifest.json`](https://huggingface.co/neroued/Qwen3.6-27B-nvfp4-NInfer/blob/main/artifact-manifest.json).
 The exact storage contract is maintained in the
 [Qwen3.6-27B artifact reference](https://github.com/Neroued/ninfer/blob/master/docs/maintainer/qwen3.6-27b-artifact.md).
 
 ## License
 
-This NInfer artifact is distributed under the Apache License 2.0. The source
-[Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) repository is also licensed under
-Apache-2.0. Users remain responsible for complying with the license and applicable laws.
+This NInfer artifact is distributed under the Apache License 2.0. The
+[Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) base repository and the
+[NVFP4 source repository](https://huggingface.co/rdtand/Qwen3.6-27B-PrismaSCOUT-Blackwell-NVFP4-BF16-vllm)
+are also licensed under Apache-2.0. Users remain responsible for complying with the license and
+applicable laws.
