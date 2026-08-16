@@ -39,11 +39,15 @@ using ninfer::ops::LinearPolicy;
 
 namespace {
 
-constexpr double kRtx5090DramGBs           = 1792.0;
-constexpr double kRtx5090SustainedReadGBs  = 1674.5;
-constexpr std::uint64_t kDefaultFlushBytes = 256ULL << 20;
-constexpr int kDefaultWarmup               = 3;
-constexpr int kDefaultRepeat               = 20;
+constexpr double kRtx5090DramGBs          = 1792.0;
+constexpr double kRtx5090SustainedReadGBs = 1674.5;
+// NVIDIA's GB202 table reports dense/sparse pairs at boost clock. Keep accumulator precision
+// explicit: this benchmark's FP8 MMA route uses e4m3 inputs with FP32 accumulation.
+constexpr double kRtx5090Fp8Fp16AccumulateTFLOPs = 838.0;
+constexpr double kRtx5090Fp8Fp32AccumulateTFLOPs = 419.0;
+constexpr std::uint64_t kDefaultFlushBytes       = 256ULL << 20;
+constexpr int kDefaultWarmup                     = 3;
+constexpr int kDefaultRepeat                     = 20;
 
 enum class TClass : std::uint8_t {
     Continuous,
@@ -153,6 +157,9 @@ struct Result {
     double dram_spec_pct           = 0.0;
     double sustained_read_pct      = 0.0;
     double useful_tflops           = 0.0;
+    const char* tensor_profile     = "";
+    double tensor_peak_tflops      = std::numeric_limits<double>::quiet_NaN();
+    double tensor_peak_pct         = std::numeric_limits<double>::quiet_NaN();
     double memory_floor_us         = 0.0;
     double memory_floor_pct        = 0.0;
     double t1_linear_extrapolation = std::numeric_limits<double>::quiet_NaN();
@@ -531,6 +538,19 @@ std::string join_labels(const std::vector<std::string>& labels) {
     return out;
 }
 
+double registered_tensor_peak_tflops(const BenchPoint& point, const char*& profile) {
+    // This mirrors the production FP8 selector. A permissive policy alone does not prove that an
+    // A8 route ran, so only the registered problem and extents currently dispatched to
+    // FP8/FP32-accumulate MMA get a Tensor Core utilization result.
+    if (point.qtype == QType::FP8_E4M3FN_ROW_BF16S && point.policy == LinearPolicy::AllowA8 &&
+        point.n == 14336 && point.k == 5120 && point.t >= 2) {
+        profile = "FP8_F32ACC";
+        return kRtx5090Fp8Fp32AccumulateTFLOPs;
+    }
+    profile = "";
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
 Result make_result(const BenchPoint& point, const LinearBenchWeight& weight,
                    const bench::ColdTiming& timing, const Options& opt) {
     const std::uint64_t x_elements =
@@ -566,11 +586,15 @@ Result make_result(const BenchPoint& point, const LinearBenchWeight& weight,
     result.dram_spec_pct      = result.effective_gbs / kRtx5090DramGBs * 100.0;
     result.sustained_read_pct = result.effective_gbs / kRtx5090SustainedReadGBs * 100.0;
     result.useful_tflops      = useful_flops / seconds / 1.0e12;
-    result.memory_floor_us    = memory_floor_us;
-    result.memory_floor_pct   = memory_floor_us / timing.median_us * 100.0;
-    result.warmup             = opt.warmup;
-    result.repeat             = opt.repeat;
-    result.flush_bytes        = opt.flush_bytes;
+    result.tensor_peak_tflops = registered_tensor_peak_tflops(point, result.tensor_profile);
+    if (std::isfinite(result.tensor_peak_tflops)) {
+        result.tensor_peak_pct = result.useful_tflops / result.tensor_peak_tflops * 100.0;
+    }
+    result.memory_floor_us  = memory_floor_us;
+    result.memory_floor_pct = memory_floor_us / timing.median_us * 100.0;
+    result.warmup           = opt.warmup;
+    result.repeat           = opt.repeat;
+    result.flush_bytes      = opt.flush_bytes;
     return result;
 }
 
@@ -683,16 +707,21 @@ void print_header() {
                 properties.major, properties.minor);
     std::printf("# dram_spec_gbs=%.1f sustained_read_gbs=%.1f cache=cold\n", kRtx5090DramGBs,
                 kRtx5090SustainedReadGBs);
+    std::printf("# dense_fp8_tensor_tflops fp16_acc=%.1f fp32_acc=%.1f\n",
+                kRtx5090Fp8Fp16AccumulateTFLOPs, kRtx5090Fp8Fp32AccumulateTFLOPs);
 }
 
 void print_results(const std::vector<Result>& results) {
-    std::printf("%-44s %5s %3s %8s %8s %6s %11s %11s %11s %10s %7s %7s %10s %9s %9s %8s\n", "label",
-                "qt", "pol", "N", "K", "T", "median_us", "min_us", "p95_us", "eff_GB/s", "DRAM_%",
-                "READ_%", "TFLOP/s", "mem_%", "T1_lin_x", "delta_%");
+    std::printf("%-44s %5s %3s %8s %8s %6s %11s %11s %11s %10s %7s %7s %10s %11s %8s "
+                "%9s %9s %8s\n",
+                "label", "qt", "pol", "N", "K", "T", "median_us", "min_us", "p95_us", "eff_GB/s",
+                "DRAM_%", "READ_%", "TFLOP/s", "TC_profile", "TC_%", "mem_%", "T1_lin_x",
+                "delta_%");
     for (const Result& result : results) {
         const bool have_delta = std::isfinite(result.delta_pct);
         char delta[32];
         char t1_linear[32];
+        char tensor_peak[32];
         if (have_delta) {
             std::snprintf(delta, sizeof(delta), "%.2f", result.delta_pct);
         } else {
@@ -703,12 +732,19 @@ void print_results(const std::vector<Result>& results) {
         } else {
             std::snprintf(t1_linear, sizeof(t1_linear), "-");
         }
+        if (std::isfinite(result.tensor_peak_pct)) {
+            std::snprintf(tensor_peak, sizeof(tensor_peak), "%.2f", result.tensor_peak_pct);
+        } else {
+            std::snprintf(tensor_peak, sizeof(tensor_peak), "-");
+        }
         std::printf("%-44s %5s %3s %8d %8d %6d %11.3f %11.3f %11.3f %10.1f %7.2f "
-                    "%7.2f %10.2f %9.2f %9s %8s\n",
+                    "%7.2f %10.2f %11s %8s %9.2f %9s %8s\n",
                     result.labels.c_str(), result.qtype_name, result.policy_name, result.n,
                     result.k, result.t, result.median_us, result.min_us, result.p95_us,
                     result.effective_gbs, result.dram_spec_pct, result.sustained_read_pct,
-                    result.useful_tflops, result.memory_floor_pct, t1_linear, delta);
+                    result.useful_tflops,
+                    result.tensor_profile[0] == '\0' ? "-" : result.tensor_profile, tensor_peak,
+                    result.memory_floor_pct, t1_linear, delta);
     }
 }
 
@@ -728,7 +764,8 @@ void write_csv(const std::filesystem::path& path, const std::vector<Result>& res
     if (!out) { throw std::runtime_error("failed to open CSV output: " + path.string()); }
     out << "label,qtype,policy,N,K,T,weight_bytes,x_bytes,out_bytes,model_bytes,"
            "useful_flops,median_us,min_us,p95_us,effective_gbs,dram_spec_gbs,dram_spec_pct,"
-           "sustained_read_gbs,sustained_read_pct,useful_tflops,memory_floor_us,memory_floor_pct,"
+           "sustained_read_gbs,sustained_read_pct,useful_tflops,tensor_profile,"
+           "tensor_peak_tflops,tensor_peak_pct,memory_floor_us,memory_floor_pct,"
            "t1_linear_extrapolation,delta_pct,"
            "warmup,repeat,flush_bytes\n";
     for (const Result& result : results) {
@@ -739,7 +776,11 @@ void write_csv(const std::filesystem::path& path, const std::vector<Result>& res
             << result.p95_us << ',' << result.effective_gbs << ',' << kRtx5090DramGBs << ','
             << result.dram_spec_pct << ',' << kRtx5090SustainedReadGBs << ','
             << result.sustained_read_pct << ',' << result.useful_tflops << ','
-            << result.memory_floor_us << ',' << result.memory_floor_pct << ',';
+            << result.tensor_profile << ',';
+        if (std::isfinite(result.tensor_peak_tflops)) { out << result.tensor_peak_tflops; }
+        out << ',';
+        if (std::isfinite(result.tensor_peak_pct)) { out << result.tensor_peak_pct; }
+        out << ',' << result.memory_floor_us << ',' << result.memory_floor_pct << ',';
         if (std::isfinite(result.t1_linear_extrapolation)) {
             out << result.t1_linear_extrapolation;
         }

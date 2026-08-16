@@ -97,7 +97,7 @@ void dispatch_linear(const Tensor& x, const Weight& w, Tensor& out, LinearPolicy
         detail::nvfp4_dispatch(x, w, out, policy, workspace, stream);
         return;
     case QType::FP8_E4M3FN_ROW_BF16S:
-        detail::fp8_dispatch(x, w, out, policy, stream);
+        detail::fp8_dispatch(x, w, out, policy, workspace, stream);
         return;
     case QType::FP32_CTRL:
     case QType::I32_CTRL:

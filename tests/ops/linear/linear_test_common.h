@@ -12,6 +12,7 @@ namespace ninfer::test::linear {
 
 enum class ActivationCompute : std::uint8_t {
     A16,
+    A8,
     A4,
 };
 

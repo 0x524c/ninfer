@@ -111,8 +111,8 @@ schedule composition in the target. There is no target-private Op category.
 
 When a contract defines an axis as the Text/MTP token extent `T`, it admits every positive value
 representable by its views and available storage unless the contract declares a semantic capacity.
-Decode, small-T, and prefill may name private implementation or benchmark regimes; they are not
-semantic variants or separate target-callable entries.
+Decode, latency-sensitive/hot-interval, and prefill may name private workload or benchmark
+regimes. They are not semantic variants, separate target-callable entries, or compute mechanisms.
 
 Other axes retain the finite geometry or capacity declared by their own contracts. A matrix column
 does not become Text/MTP `T` merely because an implementation uses the same physical layout.
@@ -445,10 +445,34 @@ production implementation is not temporary merely because it originated in the s
 
 Develop a new optimized route as one vertical transaction around a representative registered
 problem. First establish the public admission, validation, workspace query, independent oracle
-case, and public benchmark point needed to exercise that problem. Then grow kernel candidates from
-the smallest production extent through the latency-sensitive workload and finally into the
-large-extent throughput regime. These regimes describe tuning order, not semantic entries or a
-required closed taxonomy of kernels.
+case, and public benchmark point needed to exercise that problem.
+
+Keep execution mechanisms and workload regions as independent dimensions. SIMT, Tensor Core MMA,
+and other instruction or decomposition choices describe how a kernel computes. A single-token
+point, a latency-sensitive interval, and a throughput anchor describe where an implementation is
+measured. Do not treat a range label such as "small-T" as a compute mechanism, assume that MMA is
+restricted to large extents, or require one kernel family per workload region.
+
+Choose the order of mechanism exploration from the live performance question rather than a fixed
+smallest-to-largest sequence. In particular, it can be useful to establish an accelerator route at
+the primary throughput anchor before exhaustively tuning the latency-sensitive interval. Its
+measured lower-extent behavior then bounds where further non-accelerator optimization is useful.
+This ordering does not determine the eventual crossover: the latency-sensitive sweep later
+compares every relevant mechanism, and an MMA route may or may not enter that interval.
+
+When a low-precision MMA mechanism requires a private activation representation, activation
+quantization belongs to that mechanism rather than to the workload region where it happens to win.
+On-chip quantization inside the contraction and a separately launched materialization consumed by
+the contraction are distinct execution decompositions. Hold the quantization formula, scale
+granularity, and scale representation constant when attributing a result to that decomposition. If
+one decomposition requires a different arithmetic profile, qualify it separately against the
+oracle and report the comparison as a profile-plus-decomposition decision. Treat multiple
+decompositions as candidates only while the choice remains a live performance question. A
+qualified complete public route that reaches the relevant hardware roofline within measurement
+uncertainty can close that question without implementing another decomposition; never require an
+alternative whose only possible benefit would be to exceed the roofline. Otherwise compare the
+complete launch/workspace traffic of the plausible alternatives, and do not select a route from
+contraction-only timing.
 
 Each kernel family may expose compile-time schedule parameters that distinguish concrete,
 plausible candidates. Instantiate only the small overlapping candidate set needed to answer a live
@@ -471,13 +495,17 @@ bulk workload. Optimize the primary anchor for throughput and for the roofline o
 resource used by the selected route. Use sparse supporting points and as few broad routes as the
 evidence permits; a reasonable transition discontinuity is acceptable here. A permissive public
 policy does not prove that a particular accelerator route ran, so roofline evidence must identify
-and measure the implementation that production dispatch actually selects.
+and measure the implementation that production dispatch actually selects. These are completion
+requirements for the large-extent region, not a mandatory position in the development order.
 
 When a valid simple Op is the development surface for a related fused Op or epilogue, tune the
-shared computation on that simple form, make the selected kernel body parameterizable at its output
-boundary, and immediately adapt it to the actual complete Op in the same transaction. This is not
-a repository-wide simple-Op phase. The complete public fused Op, including its epilogue, post work,
-workspace traffic, outputs, and state effects, determines its final route and completion evidence.
+shared computation across the current registered problem's required extent domain and performance
+regions before adapting it. Make the selected kernel bodies parameterizable at their output
+boundary, then immediately adapt them to the actual complete Op before moving to another problem.
+Do not enter the fused Op with only a provisional route, and do not turn this into a
+repository-wide simple-Op phase. The complete public fused Op, including its epilogue, post work,
+workspace traffic, outputs, and state effects, may still change the final fused route and supplies
+its own completion evidence.
 
 Before timing, qualify each candidate arithmetic profile against the independent oracle. After
 encoding the selected instances and boundaries in production dispatch, requalify boundary and

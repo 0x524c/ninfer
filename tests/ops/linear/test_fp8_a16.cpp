@@ -14,6 +14,7 @@ int run_fp8_a16() {
     constexpr std::array invocations{
         Invocation{1, CallForm::A16Convenience, ops::LinearPolicy::A16Only},
         Invocation{1, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{2, CallForm::A16Convenience, ops::LinearPolicy::A16Only},
     };
     int failures = run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
                              {14336, 5120, 811U, Comparison::Sampled, true, invocations});

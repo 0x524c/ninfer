@@ -139,7 +139,8 @@ add_library(ninfer_ops STATIC
   ops/linear/bf16/bf16_small_t.cu
   ops/linear/bf16/bf16_dispatch.cpp
   ops/linear/fp8/fp8_format.cpp
-  ops/linear/fp8/fp8_t1.cu
+  ops/linear/fp8/fp8_gemv.cu
+  ops/linear/fp8/fp8_a8.cu
   ops/linear/fp8/fp8_dispatch.cpp
   ops/linear/nvfp4/nvfp4_format.cpp
   ops/linear/nvfp4/nvfp4_gemv.cu

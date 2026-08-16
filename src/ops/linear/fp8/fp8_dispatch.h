@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/arena.h"
 #include "core/tensor.h"
 #include "ninfer/ops/linear.h"
 
@@ -17,6 +18,6 @@ namespace ninfer::ops::detail {
                                                               std::int32_t max_tokens);
 
 void fp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPolicy policy,
-                  cudaStream_t stream);
+                  WorkspaceArena* workspace, cudaStream_t stream);
 
 } // namespace ninfer::ops::detail

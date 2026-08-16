@@ -86,7 +86,7 @@ __device__ __forceinline__ void accumulate_rows(const Fp8CodePack<Values> (&code
 }
 
 template <class Geometry, class Schedule, class Output>
-__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_t1_kernel(
+__global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_gemv_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, Output output) {
     constexpr int kValuesPerPhase = kWarpSize * Schedule::kValuesPerLane;

@@ -1,0 +1,64 @@
+#include "ops/linear/linear_test_common.h"
+
+#include <array>
+#include <exception>
+#include <iostream>
+
+namespace {
+
+using namespace ninfer;
+using namespace ninfer::test::linear;
+
+int run_fp8_a8() {
+    constexpr std::array invocations{
+        Invocation{2, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{48, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{64, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{65, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{1023, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{1024, CallForm::Policy, ops::LinearPolicy::AllowA8},
+    };
+    int failures = run_shape("FP8_A8", ActivationCompute::A8, make_fp8_weight,
+                             {14336, 5120, 829U, Comparison::Sampled, true, invocations});
+
+    const std::size_t one = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::AllowA8, 1, 1);
+    const std::size_t two = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::AllowA8, 2, 2);
+    const std::size_t forty_eight = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::AllowA8, 48, 48);
+    const std::size_t hot_interval = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::AllowA8, 1, 48);
+    const std::size_t exact_1024 = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::AllowA8, 1024, 1024);
+    const std::size_t exact_1048 = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::AllowA8, 1048, 1048);
+    const std::size_t spanning = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::AllowA8, 1000, 1048);
+    const std::size_t a16 = ops::linear_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, 14336, 5120, ops::LinearPolicy::A16Only, 1, 2048);
+    if (one != 0 || two == 0 || forty_eight <= two || hot_interval != forty_eight ||
+        exact_1024 <= forty_eight || exact_1048 <= exact_1024 || spanning != exact_1048 ||
+        a16 != 0) {
+        std::cerr << "FP8 A8 workspace interval contract mismatch\n";
+        ++failures;
+    }
+    return failures;
+}
+
+} // namespace
+
+int main() {
+    if (!ninfer::test::linear::cuda_available()) {
+        std::cout << "SKIP: no usable CUDA device\n";
+        return 77;
+    }
+    try {
+        const int failures = run_fp8_a8();
+        std::cout << (failures == 0 ? "OK" : "FAIL") << " FP8 A8 Linear\n";
+        return failures == 0 ? 0 : 1;
+    } catch (const std::exception& error) {
+        std::cerr << "FP8 A8 Linear: " << error.what() << '\n';
+        return 1;
+    }
+}

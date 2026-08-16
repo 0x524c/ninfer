@@ -2,7 +2,7 @@
 
 #include "core/device.h"
 #include "ops/linear/fp8/fp8_config.h"
-#include "ops/linear/fp8/fp8_t1.cuh"
+#include "ops/linear/fp8/fp8_gemv.cuh"
 
 #include <cuda_bf16.h>
 
@@ -44,7 +44,7 @@ struct Fp8AttentionInputOutput {
 void fp8_attn_input_launch(const Tensor& x, const Weight& weight, Tensor& q, Tensor& gate,
                            Tensor& k, Tensor& v, cudaStream_t stream) {
     using Geometry        = Fp8AttnInputGeometry;
-    using Schedule        = Fp8AttnInputT1Schedule;
+    using Schedule        = typename Fp8LinearDecodeProductionSchedule<Geometry>::Type;
     constexpr int kBlocks = Geometry::kOutputRows / Schedule::kRowsPerCta;
     const Fp8AttentionInputOutput output{
         static_cast<__nv_bfloat16*>(q.data),
@@ -52,7 +52,7 @@ void fp8_attn_input_launch(const Tensor& x, const Weight& weight, Tensor& q, Ten
         static_cast<__nv_bfloat16*>(gate.data),
         static_cast<__nv_bfloat16*>(v.data),
     };
-    fp8_t1_kernel<Geometry, Schedule><<<kBlocks, Schedule::kThreads, 0, stream>>>(
+    fp8_gemv_kernel<Geometry, Schedule><<<kBlocks, Schedule::kThreads, 0, stream>>>(
         static_cast<const __nv_bfloat16*>(x.data), static_cast<const std::uint8_t*>(weight.qdata),
         static_cast<const __nv_bfloat16*>(weight.scales), output);
     CUDA_CHECK(cudaGetLastError());
