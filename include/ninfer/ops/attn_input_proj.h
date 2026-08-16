@@ -55,8 +55,8 @@ void attn_input_proj(const Tensor& x, const Weight& query_key_weight,
  * `T` is the positive token extent of the Op contract. BF16_CTRL and W8G32_F16S admit only
  * LinearPolicy::A16Only. NVFP4 admits A16Only and AllowA4; AllowA4 permits the private resolver to
  * select either a qualified A16 route or activation quantization to NVFP4 at every positive T.
- * FP8 admits A16Only and AllowA8 at every positive T. AllowA8 currently resolves T=1 to the
- * qualified A16 CUDA-core route and every T>=2 to private activation quantization followed by the
+ * FP8 admits A16Only and AllowA8 at every positive T. AllowA8 currently resolves T<=10 to the
+ * qualified A16 CUDA-core route and every T>=11 to private activation quantization followed by the
  * A8 Tensor Core route. A16Only uses the A16 route for every positive T.
  *
  * The oracle evaluates every projection independently with naive FP64 accumulation from the

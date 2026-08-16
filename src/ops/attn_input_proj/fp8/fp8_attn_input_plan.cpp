@@ -2,6 +2,7 @@
 
 #include "ops/linear/fp8/fp8_config.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 
@@ -19,31 +20,38 @@ Fp8AttnInputRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
     if (policy != LinearPolicy::AllowA8) {
         throw std::invalid_argument("fp8 attn_input_proj: unsupported policy");
     }
-    return tokens >= 2 ? Fp8AttnInputRoute::A8 : Fp8AttnInputRoute::A16;
+    return tokens >= 11 ? Fp8AttnInputRoute::A8 : Fp8AttnInputRoute::A16;
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& q, Tensor& gate, Tensor& k,
                 Tensor& v, cudaStream_t stream) {
     constexpr std::int32_t kQRows  = 6144;
     constexpr std::int32_t kKvRows = 1024;
-    for (std::int32_t token = 0; token < x.ne[1]; ++token) {
-        auto* input = static_cast<std::uint8_t*>(x.data) +
-                      static_cast<std::int64_t>(token) * weight.k * sizeof(std::uint16_t);
+    constexpr std::int32_t kChunk  = kFp8LinearSmallTMax<Fp8AttnInputGeometry>;
+    for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {
+        const std::int32_t active = std::min(kChunk, x.ne[1] - token_begin);
+        auto* input               = static_cast<std::uint8_t*>(x.data) +
+                      static_cast<std::int64_t>(token_begin) * weight.k * sizeof(std::uint16_t);
         auto* query = static_cast<std::uint8_t*>(q.data) +
-                      static_cast<std::int64_t>(token) * kQRows * sizeof(std::uint16_t);
+                      static_cast<std::int64_t>(token_begin) * kQRows * sizeof(std::uint16_t);
         auto* output_gate = static_cast<std::uint8_t*>(gate.data) +
-                            static_cast<std::int64_t>(token) * kQRows * sizeof(std::uint16_t);
+                            static_cast<std::int64_t>(token_begin) * kQRows * sizeof(std::uint16_t);
         auto* key = static_cast<std::uint8_t*>(k.data) +
-                    static_cast<std::int64_t>(token) * kKvRows * sizeof(std::uint16_t);
+                    static_cast<std::int64_t>(token_begin) * kKvRows * sizeof(std::uint16_t);
         auto* value = static_cast<std::uint8_t*>(v.data) +
-                      static_cast<std::int64_t>(token) * kKvRows * sizeof(std::uint16_t);
-        Tensor input_token(input, DType::BF16, {weight.k, 1});
-        Tensor query_token(query, DType::BF16, {kQRows, 1});
-        Tensor gate_token(output_gate, DType::BF16, {kQRows, 1});
-        Tensor key_token(key, DType::BF16, {kKvRows, 1});
-        Tensor value_token(value, DType::BF16, {kKvRows, 1});
-        fp8_attn_input_decode_launch(input_token, weight, query_token, gate_token, key_token,
-                                     value_token, stream);
+                      static_cast<std::int64_t>(token_begin) * kKvRows * sizeof(std::uint16_t);
+        Tensor input_chunk(input, DType::BF16, {weight.k, active});
+        Tensor query_chunk(query, DType::BF16, {kQRows, active});
+        Tensor gate_chunk(output_gate, DType::BF16, {kQRows, active});
+        Tensor key_chunk(key, DType::BF16, {kKvRows, active});
+        Tensor value_chunk(value, DType::BF16, {kKvRows, active});
+        if (active == 1) {
+            fp8_attn_input_decode_launch(input_chunk, weight, query_chunk, gate_chunk, key_chunk,
+                                         value_chunk, stream);
+        } else {
+            fp8_attn_input_small_t_launch(input_chunk, weight, query_chunk, gate_chunk, key_chunk,
+                                          value_chunk, stream);
+        }
     }
 }
 

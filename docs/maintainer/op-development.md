@@ -441,6 +441,14 @@ production dispatch; verify final correctness and performance through the public
 the losing candidates, temporary controls, and comparison-only entry points. The selected
 production implementation is not temporary merely because it originated in the sweep.
 
+Construct that sweep as one candidate-by-extent matrix whenever the candidate domain is known at
+compile time. Compile the complete decision set together and collect every relevant extent in one
+run; do not emulate a sweep by repeatedly editing one template instance, rebuilding, and timing a
+few points. A second measurement pass is warranted only when the first result is invalid or
+inconclusive, or when it identifies a materially new kernel family whose result can change the
+decision. Changing one knob at a time after the decision domain is already known is not additional
+evidence.
+
 ### 7.1 Route-development transaction
 
 Develop a new optimized route as one vertical transaction around a representative registered
@@ -489,6 +497,13 @@ keeping latency progression and route boundaries stable; a boundary needs repeat
 larger than measurement uncertainty and must not introduce an avoidable latency cliff. Do not add
 a universal percentage threshold: the task records the timing conditions and the scale needed to
 distinguish its candidates.
+
+Review and report the pointwise curve, not only its minimum, maximum, average, or selected route.
+At minimum, identify the largest adjacent-extent increase and every route or schedule seam in the
+measured interval. An unexplained material jump blocks a claim that the interval is smooth: either
+change the kernel or dispatch, or record why the complete candidate matrix shows that the jump is
+currently unavoidable. Never omit, interpolate over, or replace an observed point with an
+invented value.
 
 Beyond the hot interval, select the small number of large-extent anchors that represent the actual
 bulk workload. Optimize the primary anchor for throughput and for the roofline of the execution

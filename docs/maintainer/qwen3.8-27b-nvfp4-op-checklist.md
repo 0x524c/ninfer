@@ -35,12 +35,18 @@ MTP-private 和 Vision 权重的 format 与 geometry 没有变化，因此不需
 
 本清单从 14 个未完成的完整 registration 开始：6 个 generic FP8 Linear、1 个 embedding，以及
 7 个复用 Linear contraction 实现的 fused/专用 projection registration。当前 `[14336,5120]`
-的 L2/A1、`[16384,5120]` 的 L3/G1，以及 `[34816,5120]` 的 L4/M1 纵向工作流均已完成；
-它们都接纳全部正 `T`、A16/A8 arithmetic profile 和 caller workspace。L2/A1 与 L3/G1 采用
-`T=1` 使用 A16、每个 `T>=2` 使用 A8 的最终 production boundary；L4/M1 的 `AllowA8` 在全部
-正 `T` 使用 A8。A1 直接写入 Q/K/gate/V，G1 直接写入 QKV/Z，M1 直接写入最终 SwiGLU
-结果；G2/G3 仍待完成。Artifact 中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录
-其核对依据，不能只因 format 名称相同便假定已覆盖。
+的 L2/A1、`[16384,5120]` 的 L3/G1、`[34816,5120]` 的 L4/M1、`[5120,6144]` 的 L5/R1，
+以及 `[5120,17408]` 的 L6/R2 纵向工作流均已完成；它们都接纳全部正 `T`、A16/A8 arithmetic
+profile 和 caller workspace。2026-08-17 对完整 `T=1..48` 曲线重新逐点审计后，L2 在 `T<=11`
+使用 A16、从 `T=12` 使用 A8，A1 则在 `T<=10` 使用 A16、从 `T=11` 使用 A8；L3 在 `T<=10`
+使用 A16、从 `T=11` 使用 A8，G1 在 `T<=7` 使用 A16、从 `T=8` 使用 A8；L4 在 `T=1` 使用
+A8、`T=2..4` 使用 A16、从 `T=5` 回到 A8，M1 独立采用 `T=1` A8、`T=2` A16、`T>=3` A8。
+L5/L6 在 `T<25` 使用 A16、`T>=25` 使用 A8；R1 在 `T<22` 使用 A16、`T>=22` 使用 A8；R2
+在 `T<25` 使用 A16、`T>=25` 使用 A8。每个实际 Op 拥有自己的 resolver，并依据自身完整语义
+调用确定 route。A1 直接写入
+Q/K/gate/V，G1 直接写入 QKV/Z，M1 直接写入最终
+SwiGLU 结果，R1/R2 直接完成原地 residual 更新；G2/G3 仍待完成。Artifact 中另外 112 个
+NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称相同便假定已覆盖。
 
 ## 2. 固定执行事实
 
@@ -206,10 +212,10 @@ L1..L6 以及由 L2..L6 连续改造得到的 rank-two projection Op 使用以�
   FP8 tensor-core roofline 作为 kernel 调优退出目标。`T>48` 只测回答当前吞吐或后续 crossover
   问题所需的少量点，不做逐 T 密集 candidate sweep。L2 当前 A8 route 已通过独立 oracle 数值
   criterion，并达到上述 roofline 退出目标。
-- [x] `T=1024` MMA 收敛后，先测 surviving MMA 实例在较低 T 的表现。当前实例与已有 SIMT 的
-  `T=1..48` cold-cache 对比表明：`T=1` 由 A16 以 `50.304 us` 胜出；从 `T=2` 起 A8 已胜出，且
-  `T=2..48` 保持约 `60.4..63.9 us`。Production selector 已编码当前实测边界 `T=1 -> A16`、
-  `T>=2 -> A8`；完整 hot-interval sweep 随后确认该 throughput 实例也是最终低 T winner。
+- [x] `T=1024` MMA 收敛后，测 surviving MMA 与多 token SIMT 实例在较低 T 的表现。2026-08-17
+  的完整 candidate×T 复审推翻了早先“从 T=2 起 A8 胜出”的结论：L2 在 `T=2..11` 仍由 A16
+  SIMT 胜出，只有 `T>=12` 才切到 A8。Production selector 已编码 `T<=11 -> A16`、
+  `T>=12 -> A8`，同时保留 `T=1` decode 与 compile-time multi-token SIMT 实例。
 - [x] 对每个整数 `T=1..48` sweep 所有仍合法且有竞争力的 SIMT/MMA 候选。该 interval 覆盖
   `B<=8` 与 `W<=6` 的并发和 speculative-decode 上界；即使某个整数不能直接写成当前的 `B*W`，
   也保留连续 sweep，以确定真实 crossover 和相邻 extent 的延迟。只有 crossover 附近的证据需要时
@@ -217,8 +223,9 @@ L1..L6 以及由 L2..L6 连续改造得到的 rank-two projection Op 使用以�
 - [x] Latency-sensitive interval 内按逐 T 测量选择最低且可重复的 route。最终 public benchmark
   必须只调用 public Op，并报告完整 `T=1..48` latency 曲线及相邻 median 变化；每个 production
   boundary 在 `b-1/b/b+1` 重新验证。不得保留可由另一合法候选避免的明显 latency cliff；候选差异
-  落在测量不确定度内时，采用边界更稳定且更便于同一 kernel 模板复用的选择。L2 最终曲线在
-  `T=2..48` 约为 `60.4..63.9 us`，没有额外 production boundary 或明显 latency cliff。
+  落在测量不确定度内时，采用边界更稳定且更便于同一 kernel 模板复用的选择。RTX 5090、CUDA
+  13.1、cold-cache、10 次 public-call 的 L2 最终曲线为 `50.432..63.840 us`；最大相邻增幅正是
+  route seam `T=11 -> 12` 的 `58.656 -> 62.464 us`（`+6.49%`），未再出现未报告的额外 cliff。
 - [x] 只有当前 geometry 的完整正 `T` Linear semantics、A16/A8 profile、workspace、`T=1..48`
   route 和 `T=1024` 吞吐目标全部完成后，才修改输出路径形成相邻 A/G/M/R Op。随后在实际 Op 的
   完整 public call 上重复相应曲线、boundary 和 throughput anchor；epilogue/post 改变最终 winner
@@ -235,7 +242,8 @@ boundary，不能为了复用 rank-two 曲线而把状态 Op 的 public domain �
 `attn_input_proj`。当前完成事实如下：
 
 - generic `linear` 与 fused `attn_input_proj` 都已注册该 geometry 的全部正 `T`；`A16Only` 与
-  `AllowA8` 均合法，`AllowA8` 在 `T=1` 解析为 A16、在每个 `T>=2` 解析为 A8 Tensor Core route；
+  `AllowA8` 均合法。L2 在 `T<=11` 采用 A16、`T>=12` 采用 A8；A1 依据完整 split-output 调用
+  独立采用 `T<=10` A16、`T>=11` A8；
 - A16 GEMV、A8 activation quantization/workspace、MMA mainloop 和 production schedule 由 Linear
   所有；A1 只替换 output policy，直接写 Q/K/gate/V 四个最终 allocation，没有物化 packed parent
   输出或复制 contraction 实现；
@@ -250,11 +258,13 @@ boundary，不能为了复用 rank-two 曲线而把状态 Op 的 public domain �
   accumulation 不满足 A16 数值 criterion，因此 T=1 保留 direct route；
 - T=1024 A8 public Linear median 为 `364.672 us`、`412.22 TFLOP/s`，达到 FP32 accumulation
   稠密峰值 `419 TFLOP/s` 的 `98.38%`；public A1 为 `363.776 us`、`413.23 TFLOP/s`，达到
-  `98.62%`。A1 的 `T=1` median 为 `50.432 us`，`T=2..48` 保持在 `60.672..62.720 us`，因此
-  split-output 没有改变 L2 route boundary 或引入额外 latency cliff。
+  `98.62%`。2026-08-17 的 10 次 cold-cache public sweep 中，L2 `T=1..48` 为
+  `50.432..63.840 us`，最大相邻增幅是 `T=11 -> 12` 的 `+6.49%`；A1 为
+  `50.464..64.320 us`，最大相邻增幅为 `+4.64%`，其 `T=10 -> 11` route seam 反而从
+  `62.752` 降至 `62.080 us`。Split-output 因而拥有与 L2 不同但平滑的最终 boundary。
 
 T=1 没有达到早期提出的 `<=48.75 us` / sustained-read `>=90%` 参考目标；在 direct A16、原生
-FP8 MMA 和 BF16 packed accumulation 的实测与数值筛选后，`50.304 us` direct A16 仍是最终
+FP8 MMA 和 BF16 packed accumulation 的实测与数值筛选后，约 `50.3 us` direct A16 仍是最终
 production 选择。该未达到的参考值记录为测量结果，不再作为 L2/A1 的退出阻塞。完整
 `T=1..48` 曲线、A16/A8 boundary、workspace、正 `T` domain、四输出 oracle 和 `T=1024`
 roofline 目标现已共同完成，因此 L2→A1 纵向工作流已退出。
@@ -264,20 +274,22 @@ roofline 目标现已共同完成，因此 L2→A1 纵向工作流已退出。
 `[N,K]=[16384,5120]` 的 generic `linear` 与 G1 `gdn_input_proj` 已完成以下资格验证：
 
 - 两个 public Op 都注册全部正 `T`、`A16Only`、`AllowA8` 和真实 caller-workspace capacity；
-  `AllowA8` 在 `T=1` 解析为 A16，在每个 `T>=2` 解析为 A8；
+  L3 的 `AllowA8` 在 `T<=10` 解析为 A16、从 `T=11` 解析为 A8；G1 独立采用 `T<=7` A16、
+  `T>=8` A8；
 - L3 显式注册该 geometry 的 A16/A8 production schedule，同时复用既有 GEMV、activation
   quantization 和 MMA mainloop；G1 直接写入 `qkv [10240,T]` 与 `z [6144,T]`；
 - public Linear 的 A16/A8 与 public G1 的 Q/K/V/Z row range、非整 tile tail 和 `T=1024` 均通过
   独立 E4M3FN/BF16-row-scale decode 加 naive-FP64 oracle；workspace query 与 execution high-water
   一致，已有 Q4/Q5、W8 和 NVFP4 G1 form 保持通过；
-- RTX 5090、CUDA 13.1、cold-cache、30 次 public-call 测量中，L3 的 `T=1` median 为
-  `60.672 us`；`T=2` A8 为 `64.768 us`，而 A16 为 `118.752 us`；最终 A8 的 `T=2..48`
-  保持在 `64.640..66.560 us`；
+- RTX 5090、CUDA 13.1、cold-cache、10 次 public-call 复审中，L3 `T=1..48` 为
+  `58.592..68.768 us`，最大相邻增幅是 `T=6 -> 7` 的 `+5.47%`，`T=10 -> 11` route seam
+  从 `68.768` 降至 `65.536 us`；
 - L3 的 `T=1024` public median 为 `423.232 us`、`405.92 TFLOP/s`，达到 FP32-accumulate FP8
   峰值 `419 TFLOP/s` 的 `96.88%`；完整 G1 为 `423.200 us`、`405.95 TFLOP/s`，同为
   `96.88%`；
-- G1 的 `T=1` median 为 `60.640 us`，`T=2..48` 为 `66.560..68.288 us`。Split-output 没有
-  改变 L3 route boundary 或引入新的 latency cliff，因此没有增加 shape-private kernel 候选。
+- G1 的 `T=1..48` 为 `58.592..67.584 us`，最大相邻增幅是 A16 区间内 `T=6 -> 7` 的
+  `61.408 -> 66.848 us`（`+8.86%`）；`T=7 -> 8` route seam 略降至 `66.528 us`。完整 G1
+  benchmark 因而支持与 L3 不同的 boundary。
 
 L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和吞吐锚点已经完成。G2/G3
 仍需在各自的显式 `B/W/state` public domain 上独立资格验证，不能由本里程碑代替。
@@ -287,7 +299,8 @@ L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和�
 `[N,K]=[34816,5120]` 的 generic `linear` 与 M1 `linear_swiglu` 已完成以下资格验证：
 
 - 两个 public Op 都注册全部正 `T`、`A16Only`、`AllowA8` 和真实 caller-workspace capacity；
-  `AllowA8` 在每个正 `T` 都解析为 A8 Tensor Core route；
+  L4 的 `AllowA8` 在 `T=1` 采用 A8、`T=2..4` 采用 A16、`T>=5` 回到 A8；M1 独立采用
+  `T=1` A8、`T=2` A16、`T>=3` A8；
 - public Linear 的 A16/A8，以及 public M1 的 gate/up row order、非整 tile tail、最终 SwiGLU
   输出和 `T=1024` 均通过独立 E4M3FN/BF16-row-scale decode 加 complete naive-FP64 oracle；
   workspace query 与 execution high-water 一致，已有 Q4、W8、NVFP4 LinearSwiGLU form，以及
@@ -295,9 +308,9 @@ L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和�
 - RTX 5090、CUDA 13.1、cold-cache、30 次 public-call 候选比较中，L4 的 `T=1` A8/A16
   median 分别为 `121.984/126.208 us`，完整 M1 分别为 `122.080/124.160 us`，因此该 geometry
   没有沿用较窄 N 的 T=1 A16 boundary；
-- L4 的最终 A8 `T=2..48` median 为 `121.792..124.160 us`；最终 M1 的 `T=2..48` 为
-  `121.888..124.928 us`。加上 M1 `T=1` 的 `122.112 us` 后，完整 hot interval 没有 route seam
-  或明显 latency cliff；
+- 2026-08-17 的 10 次 cold-cache public sweep 中，L4 `T=1..48` 为 `118.784..125.536 us`，
+  最大相邻增幅为 `T=2 -> 3` 的 `+2.80%`；M1 为 `118.048..125.920 us`，最大相邻增幅正是
+  `T=2 -> 3` route seam 的 `+3.25%`。非单调 arithmetic route 没有形成明显 latency cliff；
 - L4 的 `T=1024` public median 为 `827.680 us`、`441.08 TFLOP/s`；完整 M1 为
   `828.704 us`、`440.53 TFLOP/s`。两者都越过 benchmark harness 固定的 FP8/FP32-accumulate
   `419 TFLOP/s` 参考线；针对完整 M1 public `T=1024` 调用中 fused MMA kernel 的 NCU 2025.4.1
@@ -306,6 +319,47 @@ L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和�
 
 L4→M1 的完整正 `T` domain、A16/A8 数值 profile、workspace、hot interval、SwiGLU 语义和吞吐
 锚点已经完成。
+
+### 2.9 当前 L5→R1 与 L6→R2 里程碑
+
+两个 residual geometry 的 generic `linear` 与实际 `linear_add` 已连续完成：
+
+- L5/R1 `[5120,6144]` 与 L6/R2 `[5120,17408]` 都接纳全部正 `T`、`A16Only`、`AllowA8` 和
+  caller-owned activation workspace；capacity query 与 execution high-water 一致；
+- L5/L6 分别注册自己的 decode 与 MMA schedule，同时复用既有 row-FP8 decoder、activation
+  quantizer 和 contraction mainloop。R1/R2 在相同 mainloop 的输出 epilogue 中读取 original
+  residual、以 FP32 完成相加并直接写最终 BF16 residual，没有物化 public Linear 输出；
+- public Linear 的 A16/A8 与 public LinearAdd 的完整 `original_residual + W*x` 公式、两个真实
+  geometry、route 两侧、非整 MMA tile `T=65` 和 `T=1024` 均通过独立 E4M3FN/BF16 row-scale
+  decode 加 naive-FP64 oracle；activation 与 weight 保持不变；
+- L5/L6 的共享权重多 token SIMT route 消除了逐 token launch，两个 generic resolver 均采用
+  `T<25 -> A16`、`T>=25 -> A8`。10 次 cold-cache public sweep 中，L5 的 `T=1/2` 为
+  `24.576/23.840 us`，已消除早先漏报的近翻倍变化；完整区间为 `23.840..56.320 us`。最大相邻
+  增幅是 `T=19 -> 20` 的 `38.176 -> 47.104 us`（`+23.39%`），route seam `T=24 -> 25` 为
+  `48.448 -> 54.528 us`（`+12.55%`）；
+- L6 的完整区间为 `62.464..141.312 us`，最大相邻增幅是 SIMT 内部 `T=17 -> 18` 的
+  `92.192 -> 107.808 us`（`+16.94%`），route seam `T=24 -> 25` 为
+  `121.696 -> 140.288 us`（`+15.28%`）。这些仍存在的寄存器/occupancy seam 明确保留在证据中，
+  不以区间最小/最大值代替逐点报告；
+- R1 的 fused epilogue 改变了 crossover，独立确定 `T<22 -> A16`、`T>=22 -> A8`。其
+  `T=1/2` 为 `25.408/25.696 us`，完整区间为 `25.408..57.792 us`；最大相邻增幅是
+  `T=12 -> 13` 的 `34.080 -> 40.960 us`（`+20.19%`），`T=19 -> 20` 还存在
+  `47.104 -> 56.480 us`（`+19.91%`），而 `T=21 -> 22` route seam 略降；
+- R2 独立保持 `T<25 -> A16`、`T>=25 -> A8`。新增 fused 专属 streaming/v8/低 row schedule
+  后，完整区间为 `60.672..143.808 us`，最大相邻增幅降为 `T=19 -> 20` 的
+  `109.856 -> 121.920 us`（`+10.98%`），`T=24 -> 25` route seam 为 `+6.11%`；
+- R1/R2 的最终 schedule 来自一次包含两个 geometry、`T=2..24` 和 18 套 warp/row/vector/cache/
+  unroll/token-tile 候选的完整开发矩阵。R1 上述两个约 20% seam 在该矩阵中没有更快且更平滑的
+  SIMT 或 A8 替代，因而作为当前不可避免的已知结果接受；开发期 private-launcher benchmark 与
+  losing instances 已删除；
+- L5 与 R1 的 `T=1024` public median 分别为 `175.104/177.344 us`、
+  `367.92/363.27 TFLOP/s`；L6 与 R2 分别为 `476.928/480.480 us`、
+  `382.73/379.90 TFLOP/s`。对应 Linear contraction-only MMA 分别达到 `400.17` 与
+  `413.35 TFLOP/s`，完整 route 的剩余时间来自必须执行的 activation quantization，因此不再扩张
+  kernel 候选。
+
+L5→R1 与 L6→R2 的完整正 `T` domain、独立 route、A16/A8 数值 profile、workspace、原地 residual
+语义和 throughput anchor 均已完成。
 
 ## 3. Artifact 到 consumer 的完整账本
 
@@ -353,18 +407,18 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 |---|---|---|---:|---|---|---|
 | L1 | generic | `linear` | `[248320,5120]` | `BF16 [248320,T]` | full head，1 个 parent | [ ] |
 | E1 | gather | `embedding` | `[248320,5120]` | gather `BF16 [5120,T]` | embedding，1 个 parent | [ ] |
-| L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [x]（T=1/A16、T>=2/A8；完整正 T 与性能目标已完成） |
-| A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [x]（完整正 T；T=1/A16、T>=2/A8） |
-| L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [x]（完整正 T；T=1/A16、T>=2/A8） |
-| G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [x]（完整正 T；T=1/A16、T>=2/A8） |
+| L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [x]（T<=11/A16、T>=12/A8；完整正 T 与性能目标已完成） |
+| A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [x]（完整正 T；T<=10/A16、T>=11/A8） |
+| L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [x]（完整正 T；T<=10/A16、T>=11/A8） |
+| G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [x]（完整正 T；T<=7/A16、T>=8/A8） |
 | G2 | fused projection/state | `gdn_input_proj_conv_snapshot` | `[16384,5120]` | Q/K/V/Z 加 convolution-state snapshot | 同 48 个 parent | [ ] |
 | G3 | fused projection/record | `gdn_input_proj_conv_record` | `[16384,5120]` | Q/K/V/Z 加 replay projection record | 同 48 个 parent | [ ] |
-| L4 | generic | `linear` | `[34816,5120]` | `BF16 [34816,T]` | M1 工作流的 Linear 起步项 | [x]（完整正 T；AllowA8 全部走 A8） |
-| M1 | fused projection | `linear_swiglu` | `[34816,5120]` | `BF16 [17408,T]` SwiGLU | layer `56..63`，8 个 parent | [x]（完整正 T；AllowA8 全部走 A8） |
-| L5 | generic | `linear` | `[5120,6144]` | `BF16 [5120,T]` | R1 工作流的 Linear 起步项 | [ ] |
-| R1 | fused projection | `linear_add` | `[5120,6144]` | 原地 residual `BF16 [5120,T]` | 64 个 parent | [ ] |
-| L6 | generic | `linear` | `[5120,17408]` | `BF16 [5120,T]` | R2 工作流的 Linear 起步项 | [ ] |
-| R2 | fused projection | `linear_add` | `[5120,17408]` | 原地 residual `BF16 [5120,T]` | layer `56..63`，8 个 parent | [ ] |
+| L4 | generic | `linear` | `[34816,5120]` | `BF16 [34816,T]` | M1 工作流的 Linear 起步项 | [x]（完整正 T；T=1/A8、T=2..4/A16、T>=5/A8） |
+| M1 | fused projection | `linear_swiglu` | `[34816,5120]` | `BF16 [17408,T]` SwiGLU | layer `56..63`，8 个 parent | [x]（完整正 T；T=1/A8、T=2/A16、T>=3/A8） |
+| L5 | generic | `linear` | `[5120,6144]` | `BF16 [5120,T]` | R1 工作流的 Linear 起步项 | [x]（完整正 T；T<25/A16、T>=25/A8） |
+| R1 | fused projection | `linear_add` | `[5120,6144]` | 原地 residual `BF16 [5120,T]` | 64 个 parent | [x]（完整正 T；独立实测 T<22/A16、T>=22/A8） |
+| L6 | generic | `linear` | `[5120,17408]` | `BF16 [5120,T]` | R2 工作流的 Linear 起步项 | [x]（完整正 T；T<25/A16、T>=25/A8） |
+| R2 | fused projection | `linear_add` | `[5120,17408]` | 原地 residual `BF16 [5120,T]` | layer `56..63`，8 个 parent | [x]（完整正 T；独立实测 T<25/A16、T>=25/A8） |
 
 位置数量只用于证明 artifact 覆盖，不是 runtime dispatch 输入，不能出现在 Op wrapper 或 kernel
 selector 中。总表按 geometry 把 Linear 起步项与实际 Op 相邻排列：L2→A1、L3→G1/G2/G3、
@@ -654,37 +708,36 @@ mainloop 必须分别复用 L5/L6。
 
 ### R1 — row-scaled FP8 `linear_add [5120,6144]`
 
-- [ ] 在 `[5120,6144]` 纵向工作流中，L5 数值验证与调优后立即用其 output-policy 接口加入
+- [x] 在 `[5120,6144]` 纵向工作流中，L5 数值验证与调优后立即用其 output-policy 接口加入
   residual epilogue，不等待其他 L 项完成。
-- [ ] 复用 L5 的 decode、geometry、activation workspace、contraction kernel/mainloop 与 route
+- [x] 复用 L5 的 decode、geometry、activation workspace、contraction kernel/mainloop 与 route
   候选。
-- [ ] 接纳精确 FP8 parent `[5120,6144]`。
-- [ ] 接受连续 `x BF16 [6144,T]`，原地更新连续 `residual BF16 [5120,T]`，覆盖每个正 `T`。
-- [ ] 一个 registration 同时覆盖 16 个 full-attention output 和 48 个 GDN output parent；不得按
+- [x] 接纳精确 FP8 parent `[5120,6144]`。
+- [x] 接受连续 `x BF16 [6144,T]`，原地更新连续 `residual BF16 [5120,T]`，覆盖每个正 `T`。
+- [x] 一个 registration 同时覆盖 16 个 full-attention output 和 48 个 GDN output parent；不得按
   layer type、object name 或 site count dispatch。
-- [ ] 要求 x、parent plane、live workspace 和 residual 遵守完整 non-overlap 合同。
-- [ ] 注册 `AllowA8`，扩展 `linear_add_workspace_capacity_bytes`，覆盖 exact problem 与每个正
+- [x] 要求 x、parent plane、live workspace 和 residual 遵守完整 non-overlap 合同。
+- [x] 注册 `AllowA8`，扩展 `linear_add_workspace_capacity_bytes`，覆盖 exact problem 与每个正
   `T` interval。
-- [ ] 默认沿用 L5 route；fused residual epilogue 导致的分界变化必须由 R1 完整 public benchmark
-  证明。
-- [ ] 从 represented original residual 增加直接的 complete-formula oracle 覆盖。
+- [x] 以 L5 kernel 候选为起点，由 R1 的完整语义 benchmark 独立确定自身 resolver 分界。
+- [x] 从 represented original residual 增加直接的 complete-formula oracle 覆盖。
 
 ### R2 — row-scaled FP8 `linear_add [5120,17408]`
 
-- [ ] 在 `[5120,17408]` 纵向工作流中，L6 数值验证与调优后立即用其 output-policy 接口加入
+- [x] 在 `[5120,17408]` 纵向工作流中，L6 数值验证与调优后立即用其 output-policy 接口加入
   residual epilogue，不等待其他 L 项完成。
-- [ ] 复用 L6 的 decode、geometry、activation workspace、contraction kernel/mainloop 与 route
+- [x] 复用 L6 的 decode、geometry、activation workspace、contraction kernel/mainloop 与 route
   候选。
-- [ ] 接纳精确 FP8 parent `[5120,17408]`。
-- [ ] 接受连续 `x BF16 [17408,T]`，原地更新连续 `residual BF16 [5120,T]`，覆盖每个正 `T`。
-- [ ] 注册 `AllowA8`，扩展同一 capacity query，覆盖 exact problem 与每个正 `T` interval。
-- [ ] 默认沿用 L6 route；偏离只由 R2 完整 public benchmark 支持。
-- [ ] 从 represented original residual 增加直接的 complete-formula oracle 覆盖。
+- [x] 接纳精确 FP8 parent `[5120,17408]`。
+- [x] 接受连续 `x BF16 [17408,T]`，原地更新连续 `residual BF16 [5120,T]`，覆盖每个正 `T`。
+- [x] 注册 `AllowA8`，扩展同一 capacity query，覆盖 exact problem 与每个正 `T` interval。
+- [x] 以 L6 kernel 候选为起点，由 R2 的完整语义 benchmark 独立确定自身 resolver 分界。
+- [x] 从 represented original residual 增加直接的 complete-formula oracle 覆盖。
 
 R1 与 R2 共同还需：
 
-- [ ] 保持 Q5、W8、BF16 和 NVFP4 LinearAdd registration 及其 policy domain。
-- [ ] 在 public LinearAdd benchmark 中加入两个 FP8 geometry，覆盖每个 `T=1..48`、route
+- [x] 保持 Q5、W8、BF16 和 NVFP4 LinearAdd registration 及其 policy domain。
+- [x] 在 public LinearAdd benchmark 中加入两个 FP8 geometry，覆盖每个 `T=1..48`、route
   boundary 和 `T=1024`；计时必须包含 activation quantization、residual traffic 和所选的全部
   semantic kernel。
 

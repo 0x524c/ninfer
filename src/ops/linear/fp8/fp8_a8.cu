@@ -122,6 +122,12 @@ void launch_fp8_a8_quantize(const Tensor& x, const Weight& weight, Fp8A8Workspac
     case Fp8Activation5120Geometry::kInputRows:
         launch_quantize_exact<Fp8Activation5120Geometry>(x, workspace, stream);
         return;
+    case Fp8Activation6144Geometry::kInputRows:
+        launch_quantize_exact<Fp8Activation6144Geometry>(x, workspace, stream);
+        return;
+    case Fp8Activation17408Geometry::kInputRows:
+        launch_quantize_exact<Fp8Activation17408Geometry>(x, workspace, stream);
+        return;
     default:
         throw std::invalid_argument("fp8 A8 quantize: unsupported K");
     }
@@ -140,6 +146,12 @@ void launch_fp8_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Work
         return;
     case Fp8Problem::MlpGateUp:
         launch_problem<Fp8MlpGateUpGeometry>(weight, out, workspace, tokens, stream);
+        return;
+    case Fp8Problem::Residual6144:
+        launch_problem<Fp8Residual6144Geometry>(weight, out, workspace, tokens, stream);
+        return;
+    case Fp8Problem::Residual17408:
+        launch_problem<Fp8Residual17408Geometry>(weight, out, workspace, tokens, stream);
         return;
     }
 }

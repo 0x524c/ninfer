@@ -59,11 +59,10 @@ enum class LinearPolicy : std::uint8_t {
  * with FP16 scales, block-scaled NVFP4 weights, row-scaled FP8_E4M3FN_ROW_BF16S weights, plus
  * registered contiguous BF16_CTRL problems. Each format owns a finite registry of exact physical
  * weight problems and selects its kernel internally; a valid encoding and alignment do not imply
- * arbitrary N/K support. FP8 currently registers `[14336,5120]`, `[16384,5120]`, and
- * `[34816,5120]` at every positive T. The current NVFP4 problems `[N,K]` in `{[14336,5120],
- * [16384,5120], [34816,5120], [5120,6144], [5120,17408]}` accept every positive T. Text and MTP
- * packed-weight problems accept every positive column extent T. Registered Vision problems accept
- * raw-patch P in
+ * arbitrary N/K support. FP8 currently registers `[N,K]` in `{[14336,5120], [16384,5120],
+ * [34816,5120], [5120,6144], [5120,17408]}` at every positive T. The current NVFP4 problems
+ * register the same five geometries and accept every positive T. Text and MTP packed-weight
+ * problems accept every positive column extent T. Registered Vision problems accept raw-patch P in
  * `{4,8,...,131072}` or merged-token V in `[1,32768]`; a matrix column does not inherently
  * represent a text token. FP32_CTRL is unsupported.
  *
@@ -82,10 +81,12 @@ enum class LinearPolicy : std::uint8_t {
  * corresponding low-precision route: the resolved plan may remain A16 when that is the qualified
  * choice. BF16_CTRL admits only LinearPolicy::A16Only. Registered Q4/Q5/Q6/W8 formats admit
  * LinearPolicy::A16Only and LinearPolicy::AllowA8. FP8 admits the same two policies at every
- * positive T. AllowA8 resolves `[14336,5120]` and `[16384,5120]` at T=1 to A16 and every T>=2 to
- * A8; `[34816,5120]` resolves every positive T to A8. NVFP4 admits A16Only and AllowA4; AllowA4
- * permits the private resolver to select either a qualified A16 route or activation quantization
- * to NVFP4 at every positive T. The selected route depends only on the registered problem and T.
+ * positive T. AllowA8 resolves `[14336,5120]` to A16 through T=11 and A8 from T=12;
+ * `[16384,5120]` to A16 through T=10 and A8 from T=11; `[34816,5120]` to A8 at T=1, A16 at
+ * T=2..4, and A8 from T=5; both `[5120,6144]` and `[5120,17408]` resolve T<25 to A16 and T>=25
+ * to A8. NVFP4 admits A16Only and AllowA4; AllowA4 permits the private resolver to select either a
+ * qualified A16 route or activation quantization to NVFP4 at every positive T. The selected route
+ * depends only on the registered problem and T.
  *
  * @par Workspace
  * `workspace` is caller-owned call-scoped transient storage sized by

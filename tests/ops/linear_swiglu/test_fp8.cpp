@@ -10,7 +10,7 @@ int main() {
 
     try {
         constexpr std::array<std::int32_t, 2> kA16Cases{1, 2};
-        constexpr std::array<std::int32_t, 5> kA8Cases{1, 2, 48, 65, 1024};
+        constexpr std::array<std::int32_t, 6> kA8Cases{1, 2, 3, 48, 65, 1024};
         int failures = 0;
         failures += run_profile(
             "LinearSwiGLU FP8_A16",

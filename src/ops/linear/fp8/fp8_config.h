@@ -26,6 +26,16 @@ enum class Fp8CodeCache : std::uint8_t {
     Streaming,
 };
 
+enum class Fp8SmallTActivationAccess : std::uint8_t {
+    TokenPacked,
+    SharedPhase,
+};
+
+enum class Fp8SmallTBlockOrder : std::uint8_t {
+    RowsContiguous,
+    TokenTilesContiguous,
+};
+
 template <int WarpsPerCta, int RowsPerWarp, int ValuesPerLane, int AccumulatorChains,
           Fp8CodeCache CodeCache, int PhaseUnroll, int MinBlocksPerSm>
 struct Fp8GemvSchedule {
@@ -48,15 +58,48 @@ struct Fp8GemvSchedule {
     static constexpr int kRowsPerCta        = WarpsPerCta * RowsPerWarp;
 };
 
-using Fp8AttnInputGeometry      = Fp8Geometry<14336, 5120>;
-using Fp8GdnInputGeometry       = Fp8Geometry<16384, 5120>;
-using Fp8MlpGateUpGeometry      = Fp8Geometry<34816, 5120>;
-using Fp8Activation5120Geometry = Fp8ActivationGeometry<5120>;
+template <int WarpsPerCta, int RowsPerWarp, int ValuesPerLane, int TokenTile, int AccumulatorChains,
+          Fp8SmallTActivationAccess ActivationAccess, Fp8CodeCache CodeCache, int PhaseUnroll,
+          Fp8SmallTBlockOrder BlockOrder, int MinBlocksPerSm>
+struct Fp8SmallTSchedule {
+    static_assert(WarpsPerCta > 0 && WarpsPerCta <= 32);
+    static_assert(RowsPerWarp > 0 && RowsPerWarp <= 8);
+    static_assert(ValuesPerLane == 8 || ValuesPerLane == 16 || ValuesPerLane == 32);
+    static_assert(TokenTile > 0);
+    static_assert(AccumulatorChains > 0 && (AccumulatorChains & (AccumulatorChains - 1)) == 0);
+    static_assert(AccumulatorChains <= ValuesPerLane);
+    static_assert(PhaseUnroll == 1 || PhaseUnroll == 2 || PhaseUnroll == 4);
+    static_assert(MinBlocksPerSm > 0);
+
+    static constexpr int kWarpsPerCta       = WarpsPerCta;
+    static constexpr int kRowsPerWarp       = RowsPerWarp;
+    static constexpr int kValuesPerLane     = ValuesPerLane;
+    static constexpr int kTokenTile         = TokenTile;
+    static constexpr int kAccumulatorChains = AccumulatorChains;
+    static constexpr auto kActivationAccess = ActivationAccess;
+    static constexpr auto kCodeCache        = CodeCache;
+    static constexpr int kPhaseUnroll       = PhaseUnroll;
+    static constexpr auto kBlockOrder       = BlockOrder;
+    static constexpr int kMinBlocksPerSm    = MinBlocksPerSm;
+    static constexpr int kThreads           = WarpsPerCta * 32;
+    static constexpr int kRowsPerCta        = WarpsPerCta * RowsPerWarp;
+};
+
+using Fp8AttnInputGeometry       = Fp8Geometry<14336, 5120>;
+using Fp8GdnInputGeometry        = Fp8Geometry<16384, 5120>;
+using Fp8MlpGateUpGeometry       = Fp8Geometry<34816, 5120>;
+using Fp8Residual6144Geometry    = Fp8Geometry<5120, 6144>;
+using Fp8Residual17408Geometry   = Fp8Geometry<5120, 17408>;
+using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
+using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
+using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
 
 enum class Fp8Problem : std::uint8_t {
     AttnInput,
     GdnInput,
     MlpGateUp,
+    Residual6144,
+    Residual17408,
 };
 
 inline constexpr bool is_fp8_linear_problem(std::int32_t output_rows, std::int32_t input_rows) {
@@ -65,7 +108,11 @@ inline constexpr bool is_fp8_linear_problem(std::int32_t output_rows, std::int32
            (output_rows == Fp8GdnInputGeometry::kOutputRows &&
             input_rows == Fp8GdnInputGeometry::kInputRows) ||
            (output_rows == Fp8MlpGateUpGeometry::kOutputRows &&
-            input_rows == Fp8MlpGateUpGeometry::kInputRows);
+            input_rows == Fp8MlpGateUpGeometry::kInputRows) ||
+           (output_rows == Fp8Residual6144Geometry::kOutputRows &&
+            input_rows == Fp8Residual6144Geometry::kInputRows) ||
+           (output_rows == Fp8Residual17408Geometry::kOutputRows &&
+            input_rows == Fp8Residual17408Geometry::kInputRows);
 }
 
 inline Fp8Problem resolve_fp8_problem(std::int32_t output_rows, std::int32_t input_rows) {
@@ -80,6 +127,14 @@ inline Fp8Problem resolve_fp8_problem(std::int32_t output_rows, std::int32_t inp
     if (output_rows == Fp8MlpGateUpGeometry::kOutputRows &&
         input_rows == Fp8MlpGateUpGeometry::kInputRows) {
         return Fp8Problem::MlpGateUp;
+    }
+    if (output_rows == Fp8Residual6144Geometry::kOutputRows &&
+        input_rows == Fp8Residual6144Geometry::kInputRows) {
+        return Fp8Problem::Residual6144;
+    }
+    if (output_rows == Fp8Residual17408Geometry::kOutputRows &&
+        input_rows == Fp8Residual17408Geometry::kInputRows) {
+        return Fp8Problem::Residual17408;
     }
     throw std::invalid_argument("unsupported FP8 problem");
 }
@@ -102,6 +157,130 @@ struct Fp8LinearDecodeProductionSchedule<Fp8GdnInputGeometry> {
 template <>
 struct Fp8LinearDecodeProductionSchedule<Fp8MlpGateUpGeometry> {
     using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
+};
+
+template <>
+struct Fp8LinearDecodeProductionSchedule<Fp8Residual6144Geometry> {
+    using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
+};
+
+template <>
+struct Fp8LinearDecodeProductionSchedule<Fp8Residual17408Geometry> {
+    using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
+};
+
+inline constexpr std::int32_t kFp8FirstSmallT = 2;
+inline constexpr std::int32_t kFp8LastSmallT  = 24;
+
+template <class Geometry>
+inline constexpr std::int32_t kFp8LinearSmallTMax = 0;
+
+template <>
+inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8AttnInputGeometry> = 11;
+
+template <>
+inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8GdnInputGeometry> = 10;
+
+template <>
+inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8MlpGateUpGeometry> = 4;
+
+template <>
+inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8Residual6144Geometry> = kFp8LastSmallT;
+
+template <>
+inline constexpr std::int32_t kFp8LinearSmallTMax<Fp8Residual17408Geometry> = kFp8LastSmallT;
+
+inline std::int32_t fp8_linear_small_t_max(Fp8Problem problem) {
+    switch (problem) {
+    case Fp8Problem::AttnInput:
+        return kFp8LinearSmallTMax<Fp8AttnInputGeometry>;
+    case Fp8Problem::GdnInput:
+        return kFp8LinearSmallTMax<Fp8GdnInputGeometry>;
+    case Fp8Problem::MlpGateUp:
+        return kFp8LinearSmallTMax<Fp8MlpGateUpGeometry>;
+    case Fp8Problem::Residual6144:
+        return kFp8LinearSmallTMax<Fp8Residual6144Geometry>;
+    case Fp8Problem::Residual17408:
+        return kFp8LinearSmallTMax<Fp8Residual17408Geometry>;
+    }
+    throw std::logic_error("unreachable FP8 linear problem");
+}
+
+// RTX 5090 cold-cache winners for contiguous Linear output. Each geometry owns its measured
+// schedule ranges; fused semantic Ops reuse the mainloop but retain independent route frontiers.
+template <class Geometry, int ActiveTokens>
+struct Fp8LinearSmallTProductionSchedule {
+    static_assert(ActiveTokens >= kFp8FirstSmallT);
+    static_assert(ActiveTokens <= kFp8LinearSmallTMax<Geometry>);
+    static constexpr int kValuesPerLane     = 16;
+    static constexpr auto kActivationAccess = Fp8SmallTActivationAccess::TokenPacked;
+    using Type =
+        Fp8SmallTSchedule<8, 2, kValuesPerLane, ActiveTokens, 1, kActivationAccess,
+                          Fp8CodeCache::Default, 1, Fp8SmallTBlockOrder::RowsContiguous, 1>;
+};
+
+template <int ActiveTokens>
+struct Fp8LinearSmallTProductionSchedule<Fp8AttnInputGeometry, ActiveTokens> {
+    static_assert(ActiveTokens >= kFp8FirstSmallT);
+    static_assert(ActiveTokens <= kFp8LinearSmallTMax<Fp8AttnInputGeometry>);
+    static constexpr auto kActivationAccess = ActiveTokens >= 3 && ActiveTokens <= 4
+                                                  ? Fp8SmallTActivationAccess::SharedPhase
+                                                  : Fp8SmallTActivationAccess::TokenPacked;
+    using Type =
+        Fp8SmallTSchedule<8, 2, 16, ActiveTokens, 1, kActivationAccess, Fp8CodeCache::Default, 1,
+                          Fp8SmallTBlockOrder::RowsContiguous, 1>;
+};
+
+template <int ActiveTokens>
+struct Fp8LinearSmallTProductionSchedule<Fp8GdnInputGeometry, ActiveTokens> {
+    static_assert(ActiveTokens >= kFp8FirstSmallT);
+    static_assert(ActiveTokens <= kFp8LinearSmallTMax<Fp8GdnInputGeometry>);
+    static constexpr int kValuesPerLane     = ActiveTokens >= 5 && ActiveTokens <= 6 ? 8 : 16;
+    static constexpr auto kActivationAccess = ActiveTokens <= 4
+                                                  ? Fp8SmallTActivationAccess::SharedPhase
+                                                  : Fp8SmallTActivationAccess::TokenPacked;
+    using Type =
+        Fp8SmallTSchedule<8, 2, kValuesPerLane, ActiveTokens, 1, kActivationAccess,
+                          Fp8CodeCache::Default, 1, Fp8SmallTBlockOrder::RowsContiguous, 1>;
+};
+
+template <int ActiveTokens>
+struct Fp8LinearSmallTProductionSchedule<Fp8MlpGateUpGeometry, ActiveTokens> {
+    static_assert(ActiveTokens >= kFp8FirstSmallT);
+    static_assert(ActiveTokens <= kFp8LinearSmallTMax<Fp8MlpGateUpGeometry>);
+    static constexpr int kValuesPerLane     = ActiveTokens == 4 ? 8 : 16;
+    static constexpr auto kActivationAccess = ActiveTokens <= 3
+                                                  ? Fp8SmallTActivationAccess::SharedPhase
+                                                  : Fp8SmallTActivationAccess::TokenPacked;
+    using Type =
+        Fp8SmallTSchedule<8, 2, kValuesPerLane, ActiveTokens, 1, kActivationAccess,
+                          Fp8CodeCache::Default, 1, Fp8SmallTBlockOrder::RowsContiguous, 1>;
+};
+
+template <int ActiveTokens>
+struct Fp8LinearSmallTProductionSchedule<Fp8Residual6144Geometry, ActiveTokens> {
+    static_assert(ActiveTokens >= kFp8FirstSmallT);
+    static_assert(ActiveTokens <= kFp8LinearSmallTMax<Fp8Residual6144Geometry>);
+    static constexpr int kValuesPerLane = ActiveTokens >= 20 && ActiveTokens <= 23 ? 8 : 16;
+    static constexpr int kTokenTile     = ActiveTokens == 24 ? 12 : ActiveTokens;
+    static constexpr auto kBlockOrder   = ActiveTokens == 24
+                                              ? Fp8SmallTBlockOrder::TokenTilesContiguous
+                                              : Fp8SmallTBlockOrder::RowsContiguous;
+
+    using Type = Fp8SmallTSchedule<8, 2, kValuesPerLane, kTokenTile, 1,
+                                   Fp8SmallTActivationAccess::TokenPacked, Fp8CodeCache::Default, 1,
+                                   kBlockOrder, 1>;
+};
+
+template <int ActiveTokens>
+struct Fp8LinearSmallTProductionSchedule<Fp8Residual17408Geometry, ActiveTokens> {
+    static_assert(ActiveTokens >= kFp8FirstSmallT);
+    static_assert(ActiveTokens <= kFp8LinearSmallTMax<Fp8Residual17408Geometry>);
+    static constexpr int kValuesPerLane = ActiveTokens >= 18 ? 8 : 16;
+
+    using Type = Fp8SmallTSchedule<8, 2, kValuesPerLane, ActiveTokens, 1,
+                                   Fp8SmallTActivationAccess::TokenPacked, Fp8CodeCache::Default, 1,
+                                   Fp8SmallTBlockOrder::RowsContiguous, 1>;
 };
 
 } // namespace ninfer::ops::detail

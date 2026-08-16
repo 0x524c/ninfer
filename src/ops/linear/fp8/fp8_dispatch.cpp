@@ -5,6 +5,7 @@
 #include "ops/linear/fp8/fp8_format.h"
 #include "ops/linear/fp8/fp8_launch.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 
@@ -21,32 +22,60 @@ Fp8LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows, 
     if (tokens <= 0 || !is_fp8_linear_problem(output_rows, input_rows)) {
         throw std::invalid_argument("fp8 linear: unsupported shape");
     }
+    const Fp8Problem problem = resolve_fp8_problem(output_rows, input_rows);
     if (policy == LinearPolicy::A16Only) { return Fp8LinearRoute::A16; }
     if (policy != LinearPolicy::AllowA8) {
         throw std::invalid_argument("fp8 linear: unsupported policy");
     }
 
-    switch (resolve_fp8_problem(output_rows, input_rows)) {
+    switch (problem) {
     case Fp8Problem::AttnInput:
-        return tokens >= 2 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
+        return tokens >= 12 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
     case Fp8Problem::GdnInput:
-        return tokens >= 2 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
+        return tokens >= 11 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
     case Fp8Problem::MlpGateUp:
-        return Fp8LinearRoute::A8;
+        return tokens == 1 || tokens >= 5 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
+    case Fp8Problem::Residual6144:
+    case Fp8Problem::Residual17408:
+        return tokens >= 25 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
     }
     throw std::logic_error("unreachable FP8 linear problem");
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
-    for (std::int32_t token = 0; token < x.ne[1]; ++token) {
-        auto* input = static_cast<std::uint8_t*>(x.data) +
-                      static_cast<std::int64_t>(token) * weight.k * sizeof(std::uint16_t);
+    const Fp8Problem problem = resolve_fp8_problem(weight.n, weight.k);
+    const std::int32_t chunk = fp8_linear_small_t_max(problem);
+    for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += chunk) {
+        const std::int32_t active = std::min(chunk, x.ne[1] - token_begin);
+        auto* input               = static_cast<std::uint8_t*>(x.data) +
+                      static_cast<std::int64_t>(token_begin) * weight.k * sizeof(std::uint16_t);
         auto* output = static_cast<std::uint8_t*>(out.data) +
-                       static_cast<std::int64_t>(token) * weight.n * sizeof(std::uint16_t);
-        Tensor input_token(input, DType::BF16, {weight.k, 1});
-        Tensor output_token(output, DType::BF16, {weight.n, 1});
-        launch_fp8_decode(input_token, weight, output_token, stream);
+                       static_cast<std::int64_t>(token_begin) * weight.n * sizeof(std::uint16_t);
+        Tensor input_chunk(input, DType::BF16, {weight.k, active});
+        Tensor output_chunk(output, DType::BF16, {weight.n, active});
+        if (active == 1) {
+            launch_fp8_decode(input_chunk, weight, output_chunk, stream);
+        } else {
+            launch_fp8_small_t(input_chunk, weight, output_chunk, stream);
+        }
     }
+}
+
+bool interval_uses_a8(Fp8Problem problem, LinearPolicy policy, std::int32_t min_tokens,
+                      std::int32_t max_tokens) {
+    if (policy == LinearPolicy::A16Only) { return false; }
+    switch (problem) {
+    case Fp8Problem::AttnInput:
+        return max_tokens >= 12;
+    case Fp8Problem::GdnInput:
+        return max_tokens >= 11;
+    case Fp8Problem::MlpGateUp:
+        return min_tokens == 1 || max_tokens >= 5;
+    case Fp8Problem::Residual6144:
+    case Fp8Problem::Residual17408:
+        return max_tokens >= 25;
+    }
+    throw std::logic_error("unreachable FP8 linear problem");
 }
 
 } // namespace
@@ -57,8 +86,10 @@ std::size_t fp8_linear_workspace_capacity_bytes(std::int32_t output_rows, std::i
     if (min_tokens <= 0 || max_tokens < min_tokens) {
         throw std::invalid_argument("fp8 linear workspace: invalid token interval");
     }
+    const Fp8Problem problem = resolve_fp8_problem(output_rows, input_rows);
     (void)resolve_route(output_rows, input_rows, policy, min_tokens);
-    return resolve_route(output_rows, input_rows, policy, max_tokens) == Fp8LinearRoute::A8
+    (void)resolve_route(output_rows, input_rows, policy, max_tokens);
+    return interval_uses_a8(problem, policy, min_tokens, max_tokens)
                ? fp8_a8_workspace_capacity_bytes(max_tokens, input_rows)
                : 0;
 }
@@ -66,7 +97,8 @@ std::size_t fp8_linear_workspace_capacity_bytes(std::int32_t output_rows, std::i
 void fp8_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPolicy policy,
                   WorkspaceArena* workspace, cudaStream_t stream) {
     validate_fp8_weight(weight, "fp8 linear");
-    if (resolve_route(weight.n, weight.k, policy, x.ne[1]) == Fp8LinearRoute::A16) {
+    const Fp8LinearRoute route = resolve_route(weight.n, weight.k, policy, x.ne[1]);
+    if (route == Fp8LinearRoute::A16) {
         launch_a16(x, weight, out, stream);
         return;
     }

@@ -343,7 +343,7 @@ int run_fp8_target_case(DevicePackedWeight& parent, std::int32_t tokens, ops::Li
     constexpr std::int32_t kKeyBegin   = kQRows;
     constexpr std::int32_t kGateBegin  = kKeyBegin + kKvRows;
     constexpr std::int32_t kValueBegin = kGateBegin + kQRows;
-    const bool a8                      = policy == ops::LinearPolicy::AllowA8 && tokens >= 2;
+    const bool a8                      = policy == ops::LinearPolicy::AllowA8 && tokens >= 11;
     const ReductionCriterion& criterion =
         a8 ? kAttnInputProjA8Tolerance : kFp8AttnInputProjA16Tolerance;
     const std::int32_t sample_count = a8 ? kA8SampleRows : 7;
@@ -372,8 +372,10 @@ int run_fp8_target() {
     int failures          = 0;
     const std::size_t one = ops::attn_input_proj_workspace_capacity_bytes(
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 1, 1);
-    const std::size_t two = ops::attn_input_proj_workspace_capacity_bytes(
-        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 2, 2);
+    const std::size_t ten = ops::attn_input_proj_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 10, 10);
+    const std::size_t eleven = ops::attn_input_proj_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 11, 11);
     const std::size_t forty_eight = ops::attn_input_proj_workspace_capacity_bytes(
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 48, 48);
     const std::size_t hot_interval = ops::attn_input_proj_workspace_capacity_bytes(
@@ -382,14 +384,14 @@ int run_fp8_target() {
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 1024, 1024);
     const std::size_t a16 = ops::attn_input_proj_workspace_capacity_bytes(
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::A16Only, 1, 2048);
-    if (one != 0 || two == 0 || forty_eight <= two || hot_interval != forty_eight ||
-        exact_1024 <= forty_eight || a16 != 0) {
+    if (one != 0 || ten != 0 || eleven == 0 || forty_eight <= eleven ||
+        hot_interval != forty_eight || exact_1024 <= forty_eight || a16 != 0) {
         std::cerr << "FP8 attention input workspace interval contract mismatch\n";
         ++failures;
     }
     failures += run_fp8_target_case(parent, 1, ops::LinearPolicy::A16Only);
     failures += run_fp8_target_case(parent, 2, ops::LinearPolicy::A16Only);
-    for (const std::int32_t tokens : {1, 2, 48, 65, 1024}) {
+    for (const std::int32_t tokens : {1, 2, 10, 11, 48, 65, 1024}) {
         failures += run_fp8_target_case(parent, tokens, ops::LinearPolicy::AllowA8);
     }
     return failures;

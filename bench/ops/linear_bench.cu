@@ -542,11 +542,15 @@ double registered_tensor_peak_tflops(const BenchPoint& point, const char*& profi
     // This mirrors the production FP8 selector. A permissive policy alone does not prove that an
     // A8 route ran, so only the registered problem and extents currently dispatched to
     // FP8/FP32-accumulate MMA get a Tensor Core utilization result.
-    const bool fp8_problem = (point.n == 14336 && point.k == 5120) ||
-                             (point.n == 16384 && point.k == 5120) ||
-                             (point.n == 34816 && point.k == 5120);
+    const bool fp8_problem =
+        (point.n == 14336 && point.k == 5120) || (point.n == 16384 && point.k == 5120) ||
+        (point.n == 34816 && point.k == 5120) || (point.n == 5120 && point.k == 6144) ||
+        (point.n == 5120 && point.k == 17408);
     const bool fp8_tensor_route =
-        point.t >= 2 || (point.n == 34816 && point.k == 5120 && point.t >= 1);
+        (point.n == 14336 && point.k == 5120 && point.t >= 12) ||
+        (point.n == 16384 && point.k == 5120 && point.t >= 11) ||
+        (point.n == 34816 && point.k == 5120 && (point.t == 1 || point.t >= 5)) ||
+        (point.n == 5120 && (point.k == 6144 || point.k == 17408) && point.t >= 25);
     if (point.qtype == QType::FP8_E4M3FN_ROW_BF16S && point.policy == LinearPolicy::AllowA8 &&
         fp8_problem && fp8_tensor_route) {
         profile = "FP8_F32ACC";

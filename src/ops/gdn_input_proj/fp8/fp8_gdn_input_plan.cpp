@@ -2,6 +2,7 @@
 
 #include "ops/linear/fp8/fp8_config.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 
@@ -19,24 +20,31 @@ Fp8GdnInputRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
     if (policy != LinearPolicy::AllowA8) {
         throw std::invalid_argument("fp8 gdn_input_proj: unsupported policy");
     }
-    return tokens >= 2 ? Fp8GdnInputRoute::A8 : Fp8GdnInputRoute::A16;
+    return tokens >= 8 ? Fp8GdnInputRoute::A8 : Fp8GdnInputRoute::A16;
 }
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                 cudaStream_t stream) {
     constexpr std::int32_t kQkvRows = 10240;
     constexpr std::int32_t kZRows   = 6144;
-    for (std::int32_t token = 0; token < x.ne[1]; ++token) {
-        auto* input = static_cast<std::uint8_t*>(x.data) +
-                      static_cast<std::int64_t>(token) * weight.k * sizeof(std::uint16_t);
-        auto* qkv_output = static_cast<std::uint8_t*>(qkv.data) +
-                           static_cast<std::int64_t>(token) * kQkvRows * sizeof(std::uint16_t);
+    constexpr std::int32_t kChunk   = kFp8LinearSmallTMax<Fp8GdnInputGeometry>;
+    for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += kChunk) {
+        const std::int32_t active = std::min(kChunk, x.ne[1] - token_begin);
+        auto* input               = static_cast<std::uint8_t*>(x.data) +
+                      static_cast<std::int64_t>(token_begin) * weight.k * sizeof(std::uint16_t);
+        auto* qkv_output =
+            static_cast<std::uint8_t*>(qkv.data) +
+            static_cast<std::int64_t>(token_begin) * kQkvRows * sizeof(std::uint16_t);
         auto* z_output = static_cast<std::uint8_t*>(z.data) +
-                         static_cast<std::int64_t>(token) * kZRows * sizeof(std::uint16_t);
-        Tensor input_token(input, DType::BF16, {weight.k, 1});
-        Tensor qkv_token(qkv_output, DType::BF16, {kQkvRows, 1});
-        Tensor z_token(z_output, DType::BF16, {kZRows, 1});
-        fp8_gdn_input_decode_launch(input_token, weight, qkv_token, z_token, stream);
+                         static_cast<std::int64_t>(token_begin) * kZRows * sizeof(std::uint16_t);
+        Tensor input_chunk(input, DType::BF16, {weight.k, active});
+        Tensor qkv_chunk(qkv_output, DType::BF16, {kQkvRows, active});
+        Tensor z_chunk(z_output, DType::BF16, {kZRows, active});
+        if (active == 1) {
+            fp8_gdn_input_decode_launch(input_chunk, weight, qkv_chunk, z_chunk, stream);
+        } else {
+            fp8_gdn_input_small_t_launch(input_chunk, weight, qkv_chunk, z_chunk, stream);
+        }
     }
 }
 

@@ -41,6 +41,12 @@ void launch_fp8_decode(const Tensor& x, const Weight& weight, Tensor& out, cudaS
     case Fp8Problem::MlpGateUp:
         launch_exact<Fp8MlpGateUpGeometry>(x, weight, out, stream);
         return;
+    case Fp8Problem::Residual6144:
+        launch_exact<Fp8Residual6144Geometry>(x, weight, out, stream);
+        return;
+    case Fp8Problem::Residual17408:
+        launch_exact<Fp8Residual17408Geometry>(x, weight, out, stream);
+        return;
     }
 }
 

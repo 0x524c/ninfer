@@ -510,6 +510,25 @@ cmake --build build --parallel --target ninfer_w8_linear_add_bench
   --profile --production-only --t-sweep 1024
 ```
 
+## FP8 LinearAdd Op benchmark
+
+`ninfer_fp8_linear_add_bench` measures the two public row-scaled FP8 LinearAdd registrations,
+including activation quantization, caller-owned workspace, contraction, residual read, and final
+in-place BF16 write. `--policy a8` follows the independent production resolver of the selected
+semantic Op: `[5120,6144]` uses A16 below `T=22`, while `[5120,17408]` uses A16 below `T=25`; larger
+extents use FP8/FP32-accumulate Tensor Core contraction. `TC_%` is reported only when that A8 route
+actually executes, against the RTX 5090 419 TFLOP/s reference.
+
+```bash
+cmake --build build --parallel --target ninfer_fp8_linear_add_bench
+./build/bench/ninfer_fp8_linear_add_bench \
+  --k 6144 --policy a8 --t-sweep 1,2,4,8,16,20,21,22,32,48,1024 \
+  --warmup 5 --repeat 30
+./build/bench/ninfer_fp8_linear_add_bench \
+  --k 17408 --policy a8 --t-sweep 1,2,4,8,16,24,25,32,48,1024 \
+  --warmup 5 --repeat 30
+```
+
 ## Attention input-projection Op benchmark
 
 `ninfer_attn_input_proj_bench` measures every registered public `attn_input_proj()` weight/shape

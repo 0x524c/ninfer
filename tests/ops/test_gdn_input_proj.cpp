@@ -246,7 +246,7 @@ int run_fp8_case(DevicePackedWeight& parent, std::int32_t tokens, ops::LinearPol
     }
     cuda_synchronize();
 
-    const bool a8 = policy == ops::LinearPolicy::AllowA8 && tokens >= 2;
+    const bool a8 = policy == ops::LinearPolicy::AllowA8 && tokens >= 8;
     const ReductionCriterion& criterion =
         a8 ? kFp8GdnInputProjA8Tolerance : kFp8GdnInputProjA16Tolerance;
     const std::int32_t sample_count = a8 ? kA8SampleRows : 7;
@@ -286,8 +286,10 @@ int run_fp8() {
     int failures          = 0;
     const std::size_t one = ops::gdn_input_proj_workspace_capacity_bytes(
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 1, 1);
-    const std::size_t two = ops::gdn_input_proj_workspace_capacity_bytes(
-        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 2, 2);
+    const std::size_t seven = ops::gdn_input_proj_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 7, 7);
+    const std::size_t eight = ops::gdn_input_proj_workspace_capacity_bytes(
+        QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 8, 8);
     const std::size_t forty_eight = ops::gdn_input_proj_workspace_capacity_bytes(
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 48, 48);
     const std::size_t hot_interval = ops::gdn_input_proj_workspace_capacity_bytes(
@@ -296,15 +298,15 @@ int run_fp8() {
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::AllowA8, 1024, 1024);
     const std::size_t a16 = ops::gdn_input_proj_workspace_capacity_bytes(
         QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, ops::LinearPolicy::A16Only, 1, 2048);
-    if (one != 0 || two == 0 || forty_eight <= two || hot_interval != forty_eight ||
-        exact_1024 <= forty_eight || a16 != 0) {
+    if (one != 0 || seven != 0 || eight == 0 || forty_eight <= eight ||
+        hot_interval != forty_eight || exact_1024 <= forty_eight || a16 != 0) {
         std::cerr << "FP8 gdn input workspace interval contract mismatch\n";
         ++failures;
     }
 
     failures += run_fp8_case(parent, 1, ops::LinearPolicy::A16Only, true);
     failures += run_fp8_case(parent, 2, ops::LinearPolicy::A16Only);
-    for (const std::int32_t tokens : {1, 2, 48, 65, 1024}) {
+    for (const std::int32_t tokens : {1, 2, 7, 8, 48, 65, 1024}) {
         failures += run_fp8_case(parent, tokens, ops::LinearPolicy::AllowA8);
     }
     return failures;
