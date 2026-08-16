@@ -138,6 +138,9 @@ void launch_fp8_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Work
     case Fp8Problem::GdnInput:
         launch_problem<Fp8GdnInputGeometry>(weight, out, workspace, tokens, stream);
         return;
+    case Fp8Problem::MlpGateUp:
+        launch_problem<Fp8MlpGateUpGeometry>(weight, out, workspace, tokens, stream);
+        return;
     }
 }
 

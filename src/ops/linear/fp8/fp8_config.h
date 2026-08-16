@@ -50,18 +50,22 @@ struct Fp8GemvSchedule {
 
 using Fp8AttnInputGeometry      = Fp8Geometry<14336, 5120>;
 using Fp8GdnInputGeometry       = Fp8Geometry<16384, 5120>;
+using Fp8MlpGateUpGeometry      = Fp8Geometry<34816, 5120>;
 using Fp8Activation5120Geometry = Fp8ActivationGeometry<5120>;
 
 enum class Fp8Problem : std::uint8_t {
     AttnInput,
     GdnInput,
+    MlpGateUp,
 };
 
 inline constexpr bool is_fp8_linear_problem(std::int32_t output_rows, std::int32_t input_rows) {
     return (output_rows == Fp8AttnInputGeometry::kOutputRows &&
             input_rows == Fp8AttnInputGeometry::kInputRows) ||
            (output_rows == Fp8GdnInputGeometry::kOutputRows &&
-            input_rows == Fp8GdnInputGeometry::kInputRows);
+            input_rows == Fp8GdnInputGeometry::kInputRows) ||
+           (output_rows == Fp8MlpGateUpGeometry::kOutputRows &&
+            input_rows == Fp8MlpGateUpGeometry::kInputRows);
 }
 
 inline Fp8Problem resolve_fp8_problem(std::int32_t output_rows, std::int32_t input_rows) {
@@ -72,6 +76,10 @@ inline Fp8Problem resolve_fp8_problem(std::int32_t output_rows, std::int32_t inp
     if (output_rows == Fp8GdnInputGeometry::kOutputRows &&
         input_rows == Fp8GdnInputGeometry::kInputRows) {
         return Fp8Problem::GdnInput;
+    }
+    if (output_rows == Fp8MlpGateUpGeometry::kOutputRows &&
+        input_rows == Fp8MlpGateUpGeometry::kInputRows) {
+        return Fp8Problem::MlpGateUp;
     }
     throw std::invalid_argument("unsupported FP8 problem");
 }
@@ -88,6 +96,11 @@ struct Fp8LinearDecodeProductionSchedule<Fp8AttnInputGeometry> {
 
 template <>
 struct Fp8LinearDecodeProductionSchedule<Fp8GdnInputGeometry> {
+    using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
+};
+
+template <>
+struct Fp8LinearDecodeProductionSchedule<Fp8MlpGateUpGeometry> {
     using Type = Fp8GemvSchedule<8, 2, 8, 4, Fp8CodeCache::Default, 2, 2>;
 };
 

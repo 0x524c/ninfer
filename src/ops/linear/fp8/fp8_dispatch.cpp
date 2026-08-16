@@ -31,6 +31,8 @@ Fp8LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows, 
         return tokens >= 2 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
     case Fp8Problem::GdnInput:
         return tokens >= 2 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
+    case Fp8Problem::MlpGateUp:
+        return Fp8LinearRoute::A8;
     }
     throw std::logic_error("unreachable FP8 linear problem");
 }

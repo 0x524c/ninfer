@@ -20,6 +20,12 @@ int run_fp8_a16() {
                              {14336, 5120, 811U, Comparison::Sampled, true, invocations});
     failures += run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
                           {16384, 5120, 817U, Comparison::Sampled, true, invocations});
+    constexpr std::array mlp_invocations{
+        Invocation{1, CallForm::A16Convenience, ops::LinearPolicy::A16Only},
+        Invocation{2, CallForm::A16Convenience, ops::LinearPolicy::A16Only},
+    };
+    failures += run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
+                          {34816, 5120, 821U, Comparison::Sampled, true, mlp_invocations});
 
     auto packed = make_fp8_weight(14336, 5120, 823U);
     try {

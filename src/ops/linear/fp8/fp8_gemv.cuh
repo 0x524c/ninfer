@@ -18,6 +18,12 @@
 
 namespace ninfer::ops::detail {
 
+struct Fp8GemvIdentityRows {
+    __device__ __forceinline__ int weight_row(int row_begin, int local_row) const {
+        return row_begin + local_row;
+    }
+};
+
 template <int Values>
 struct alignas(Values) Fp8CodePack {
     static_assert(Values == 8 || Values == 16 || Values == 32);
@@ -85,19 +91,25 @@ __device__ __forceinline__ void accumulate_rows(const Fp8CodePack<Values> (&code
     }
 }
 
-template <class Geometry, class Schedule, class Output>
+template <class Geometry, class Schedule, class Output, class RowPolicy = Fp8GemvIdentityRows,
+          bool PairRows = false>
 __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_gemv_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
-    const __nv_bfloat16* __restrict__ row_scales, Output output) {
+    const __nv_bfloat16* __restrict__ row_scales, Output output, RowPolicy row_policy = {}) {
     constexpr int kValuesPerPhase = kWarpSize * Schedule::kValuesPerLane;
     static_assert((Geometry::kInputRows % kValuesPerPhase) == 0);
     static_assert((Geometry::kOutputRows % Schedule::kRowsPerCta) == 0);
+    static_assert(!PairRows || (Schedule::kRowsPerWarp % 2) == 0);
+    static_assert(!PairRows || ((Geometry::kOutputRows / 2) % (Schedule::kRowsPerCta / 2)) == 0);
     constexpr int kPhases = Geometry::kInputRows / kValuesPerPhase;
+    constexpr int kStoredRowsPerWarp =
+        PairRows ? Schedule::kRowsPerWarp / 2 : Schedule::kRowsPerWarp;
+    constexpr int kStoredRowsPerCta = Schedule::kWarpsPerCta * kStoredRowsPerWarp;
 
     const int lane = static_cast<int>(threadIdx.x) & (kWarpSize - 1);
     const int warp = static_cast<int>(threadIdx.x) / kWarpSize;
-    const int row0 =
-        static_cast<int>(blockIdx.x) * Schedule::kRowsPerCta + warp * Schedule::kRowsPerWarp;
+    const int row_begin =
+        static_cast<int>(blockIdx.x) * kStoredRowsPerCta + warp * kStoredRowsPerWarp;
     const auto* activation_pairs = reinterpret_cast<const std::uint32_t*>(x);
     float accumulators[Schedule::kRowsPerWarp][Schedule::kAccumulatorChains] = {};
 
@@ -107,25 +119,50 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
         Fp8CodePack<Schedule::kValuesPerLane> row_codes[Schedule::kRowsPerWarp];
 #pragma unroll
         for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
+            const int weight_row = row_policy.weight_row(row_begin, local_row);
             row_codes[local_row] = load_fp8_codes<Schedule::kCodeCache, Schedule::kValuesPerLane>(
-                weight_codes + static_cast<std::int64_t>(row0 + local_row) * Geometry::kInputRows +
+                weight_codes + static_cast<std::int64_t>(weight_row) * Geometry::kInputRows +
                 value_begin);
         }
         accumulate_rows(row_codes, activation_pairs + value_begin / 2, accumulators);
     }
 
+    if constexpr (PairRows) {
+        float totals[Schedule::kRowsPerWarp];
 #pragma unroll
-    for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
-        float total = 0.0F;
+        for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
+            float total = 0.0F;
 #pragma unroll
-        for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
-            total += accumulators[local_row][chain];
+            for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
+                total += accumulators[local_row][chain];
+            }
+            totals[local_row] = warp_reduce_sum(total);
         }
-        total = warp_reduce_sum(total);
         if (lane == 0) {
-            const int parent_row  = row0 + local_row;
-            const float row_scale = __bfloat162float(row_scales[parent_row]);
-            output.store(parent_row, 0, total * row_scale);
+#pragma unroll
+            for (int local_row = 0; local_row < kStoredRowsPerWarp; ++local_row) {
+                const int gate_row = row_policy.weight_row(row_begin, local_row);
+                const int up_row = row_policy.weight_row(row_begin, kStoredRowsPerWarp + local_row);
+                const float gate = totals[local_row] * __bfloat162float(row_scales[gate_row]);
+                const float up =
+                    totals[kStoredRowsPerWarp + local_row] * __bfloat162float(row_scales[up_row]);
+                output.store_pair(row_begin + local_row, 0, gate, up);
+            }
+        }
+    } else {
+#pragma unroll
+        for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
+            float total = 0.0F;
+#pragma unroll
+            for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
+                total += accumulators[local_row][chain];
+            }
+            total = warp_reduce_sum(total);
+            if (lane == 0) {
+                const int parent_row = row_policy.weight_row(row_begin, local_row);
+                const float value    = total * __bfloat162float(row_scales[parent_row]);
+                output.store(parent_row, 0, value);
+            }
         }
     }
 }

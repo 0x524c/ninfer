@@ -35,11 +35,12 @@ MTP-private 和 Vision 权重的 format 与 geometry 没有变化，因此不需
 
 本清单从 14 个未完成的完整 registration 开始：6 个 generic FP8 Linear、1 个 embedding，以及
 7 个复用 Linear contraction 实现的 fused/专用 projection registration。当前 `[14336,5120]`
-的 L2/A1 与 `[16384,5120]` 的 L3/G1 纵向工作流均已完成；它们都接纳全部正 `T`、A16/A8
-arithmetic profile 和 caller workspace，并采用 `T=1` 使用 A16、每个 `T>=2` 使用 A8 的最终
-production boundary。A1 直接写入 Q/K/gate/V，G1 直接写入 QKV/Z；G2/G3 仍待完成。Artifact
-中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称
-相同便假定已覆盖。
+的 L2/A1、`[16384,5120]` 的 L3/G1，以及 `[34816,5120]` 的 L4/M1 纵向工作流均已完成；
+它们都接纳全部正 `T`、A16/A8 arithmetic profile 和 caller workspace。L2/A1 与 L3/G1 采用
+`T=1` 使用 A16、每个 `T>=2` 使用 A8 的最终 production boundary；L4/M1 的 `AllowA8` 在全部
+正 `T` 使用 A8。A1 直接写入 Q/K/gate/V，G1 直接写入 QKV/Z，M1 直接写入最终 SwiGLU
+结果；G2/G3 仍待完成。Artifact 中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录
+其核对依据，不能只因 format 名称相同便假定已覆盖。
 
 ## 2. 固定执行事实
 
@@ -281,6 +282,31 @@ roofline 目标现已共同完成，因此 L2→A1 纵向工作流已退出。
 L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和吞吐锚点已经完成。G2/G3
 仍需在各自的显式 `B/W/state` public domain 上独立资格验证，不能由本里程碑代替。
 
+### 2.8 当前 L4→M1 里程碑
+
+`[N,K]=[34816,5120]` 的 generic `linear` 与 M1 `linear_swiglu` 已完成以下资格验证：
+
+- 两个 public Op 都注册全部正 `T`、`A16Only`、`AllowA8` 和真实 caller-workspace capacity；
+  `AllowA8` 在每个正 `T` 都解析为 A8 Tensor Core route；
+- public Linear 的 A16/A8，以及 public M1 的 gate/up row order、非整 tile tail、最终 SwiGLU
+  输出和 `T=1024` 均通过独立 E4M3FN/BF16-row-scale decode 加 complete naive-FP64 oracle；
+  workspace query 与 execution high-water 一致，已有 Q4、W8、NVFP4 LinearSwiGLU form，以及
+  已完成的 FP8 attention/GDN projection 保持通过；
+- RTX 5090、CUDA 13.1、cold-cache、30 次 public-call 候选比较中，L4 的 `T=1` A8/A16
+  median 分别为 `121.984/126.208 us`，完整 M1 分别为 `122.080/124.160 us`，因此该 geometry
+  没有沿用较窄 N 的 T=1 A16 boundary；
+- L4 的最终 A8 `T=2..48` median 为 `121.792..124.160 us`；最终 M1 的 `T=2..48` 为
+  `121.888..124.928 us`。加上 M1 `T=1` 的 `122.112 us` 后，完整 hot interval 没有 route seam
+  或明显 latency cliff；
+- L4 的 `T=1024` public median 为 `827.680 us`、`441.08 TFLOP/s`；完整 M1 为
+  `828.704 us`、`440.53 TFLOP/s`。两者都越过 benchmark harness 固定的 FP8/FP32-accumulate
+  `419 TFLOP/s` 参考线；针对完整 M1 public `T=1024` 调用中 fused MMA kernel 的 NCU 2025.4.1
+  捕获报告 `SM: Pipe Tensor Cycles Active = 90.80%`、`Compute (SM) Throughput = 90.80%`。
+  因此固定参考线比值只作为吞吐调优退出证据，不解释为 NCU 利用率，也不再追加 kernel 候选。
+
+L4→M1 的完整正 `T` domain、A16/A8 数值 profile、workspace、hot interval、SwiGLU 语义和吞吐
+锚点已经完成。
+
 ## 3. Artifact 到 consumer 的完整账本
 
 ### 3.1 Row-scaled FP8 parent
@@ -333,8 +359,8 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 | G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [x]（完整正 T；T=1/A16、T>=2/A8） |
 | G2 | fused projection/state | `gdn_input_proj_conv_snapshot` | `[16384,5120]` | Q/K/V/Z 加 convolution-state snapshot | 同 48 个 parent | [ ] |
 | G3 | fused projection/record | `gdn_input_proj_conv_record` | `[16384,5120]` | Q/K/V/Z 加 replay projection record | 同 48 个 parent | [ ] |
-| L4 | generic | `linear` | `[34816,5120]` | `BF16 [34816,T]` | M1 工作流的 Linear 起步项 | [ ] |
-| M1 | fused projection | `linear_swiglu` | `[34816,5120]` | `BF16 [17408,T]` SwiGLU | layer `56..63`，8 个 parent | [ ] |
+| L4 | generic | `linear` | `[34816,5120]` | `BF16 [34816,T]` | M1 工作流的 Linear 起步项 | [x]（完整正 T；AllowA8 全部走 A8） |
+| M1 | fused projection | `linear_swiglu` | `[34816,5120]` | `BF16 [17408,T]` SwiGLU | layer `56..63`，8 个 parent | [x]（完整正 T；AllowA8 全部走 A8） |
 | L5 | generic | `linear` | `[5120,6144]` | `BF16 [5120,T]` | R1 工作流的 Linear 起步项 | [ ] |
 | R1 | fused projection | `linear_add` | `[5120,6144]` | 原地 residual `BF16 [5120,T]` | 64 个 parent | [ ] |
 | L6 | generic | `linear` | `[5120,17408]` | `BF16 [5120,T]` | R2 工作流的 Linear 起步项 | [ ] |
@@ -583,16 +609,16 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
 
 ### M1 — row-scaled FP8 `linear_swiglu [34816,5120]`
 
-- [ ] 在 `[34816,5120]` 纵向工作流中，L4 数值验证与调优后立即把 kernel 模板改造成 M1 的
+- [x] 在 `[34816,5120]` 纵向工作流中，L4 数值验证与调优后立即把 kernel 模板改造成 M1 的
   SwiGLU epilogue/post，不等待其他 L 项完成。
-- [ ] 复用 L4 的 FP8 decode、geometry、activation quantization、contraction mainloop、schedule
+- [x] 复用 L4 的 FP8 decode、geometry、activation quantization、contraction mainloop、schedule
   和 route 候选。
-- [ ] 接纳精确的完整 FP8 parent `[34816,5120]`，row order 为
+- [x] 接纳精确的完整 FP8 parent `[34816,5120]`，row order 为
   `[gate 17408, up 17408]`。
-- [ ] 接受连续 `x BF16 [5120,T]`，写入连续 `out BF16 [17408,T]`，覆盖每个正 `T`。
-- [ ] 要求 x、完整 parent、live workspace 和 out 互不重叠；weight 不可变，Op 不持有
+- [x] 接受连续 `x BF16 [5120,T]`，写入连续 `out BF16 [17408,T]`，覆盖每个正 `T`。
+- [x] 要求 x、完整 parent、live workspace 和 out 互不重叠；weight 不可变，Op 不持有
   persistent state。
-- [ ] 实现完整逻辑公式：
+- [x] 实现完整逻辑公式：
 
   ```text
   gate[:,t] = Wgate * x[:,t]
@@ -600,17 +626,17 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
   out[:,t]  = SiLU(gate[:,t]) * up[:,t]
   ```
 
-- [ ] Gate/up projection 保持 private。物化 `BF16 [34816,T]` 既不是必需实现，也不是可观察的
+- [x] Gate/up projection 保持 private。物化 `BF16 [34816,T]` 既不是必需实现，也不是可观察的
   语义边界。
-- [ ] 注册 `AllowA8`，扩展 `linear_swiglu_workspace_capacity_bytes`，覆盖 exact FP8 problem
+- [x] 注册 `AllowA8`，扩展 `linear_swiglu_workspace_capacity_bytes`，覆盖 exact FP8 problem
   和每个正 `T` interval。
-- [ ] 以 L4 route 为起点；允许使用复用 L4 mainloop 但带 fused SwiGLU epilogue 的 kernel，或在
+- [x] 以 L4 route 为起点；允许使用复用 L4 mainloop 但带 fused SwiGLU epilogue 的 kernel，或在
   合适 extent 使用 Linear-owned kernel 加 private post。最终分界只由 M1 的完整 public benchmark
   决定。
-- [ ] 从精确解码的 FP8 row 和 represented BF16 input 扩展独立 complete-formula oracle，直接检查
+- [x] 从精确解码的 FP8 row 和 represented BF16 input 扩展独立 complete-formula oracle，直接检查
   最终输出；A16/A8 profile 仅在 arithmetic profile 实质不同的情况下使用不同的具名 criterion。
-- [ ] 保持现有 Q4、W8 和 NVFP4 LinearSwiGLU registration。
-- [ ] 在 public LinearSwiGLU benchmark 中加入 FP8 profile，覆盖每个 `T=1..48`、route boundary
+- [x] 保持现有 Q4、W8 和 NVFP4 LinearSwiGLU registration。
+- [x] 在 public LinearSwiGLU benchmark 中加入 FP8 profile，覆盖每个 `T=1..48`、route boundary
   和 `T=1024`。计时把 activation quantization、workspace traffic、contraction 与 SwiGLU 视为
   一次完整 public call。
 

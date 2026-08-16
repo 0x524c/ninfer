@@ -28,6 +28,12 @@ enum class Fp8MmaRaster : std::uint8_t {
     Grouped,
 };
 
+struct Fp8MmaIdentityRows {
+    __device__ __forceinline__ int weight_row(int row_begin, int local_row) const {
+        return row_begin + local_row;
+    }
+};
+
 template <int BlockTokens, int BlockRows, int BlockK, int WarpsTokens, int WarpsRows, int Stages,
           int MinBlocksPerSm, Cache WeightCache, Cache ActivationCache,
           Fp8MmaFragmentPipeline FragmentPipeline, Fp8MmaRaster Raster, int RasterGroupRows = 1>
@@ -97,11 +103,12 @@ fp8_mma_tile_coordinates(std::int32_t linear, std::int32_t row_tiles, std::int32
     }
 }
 
-template <class Geometry, class Schedule, bool FullTokens, class Epilogue, class Output>
+template <class Geometry, class Schedule, bool FullTokens, class Epilogue, class Output,
+          class RowPolicy = Fp8MmaIdentityRows, bool PairRows = false>
 __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_mma_kernel(
     const std::uint8_t* __restrict__ activation_codes, const float* __restrict__ activation_scales,
     const std::uint8_t* __restrict__ weight_codes, const __nv_bfloat16* __restrict__ weight_scales,
-    std::int32_t tokens, Epilogue epilogue, Output output) {
+    std::int32_t tokens, Epilogue epilogue, Output output, RowPolicy row_policy = {}) {
     constexpr int TILES_K = Geometry::kInputRows / Schedule::kBlockK;
     constexpr int BM      = Schedule::kBlockTokens;
     constexpr int BN      = Schedule::kBlockRows;
@@ -110,6 +117,8 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     constexpr int THREADS = Schedule::kThreads;
     static_assert((Geometry::kInputRows % BK) == 0);
     static_assert((Geometry::kOutputRows % BN) == 0);
+    static_assert(!PairRows || (BN % 2) == 0);
+    static_assert(!PairRows || ((Geometry::kOutputRows / 2) % (BN / 2)) == 0);
     static_assert(TILES_K >= S);
     static_assert(Schedule::kSharedBytes >= BM * (BN + 8) * sizeof(__nv_bfloat16));
 
@@ -129,8 +138,9 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     int token_tile          = 0;
     fp8_mma_tile_coordinates<Schedule>(static_cast<int>(blockIdx.x), row_tiles, token_tiles,
                                        row_tile, token_tile);
-    const int row_begin   = row_tile * BN;
-    const int token_begin = token_tile * BM;
+    constexpr int rows_per_block = PairRows ? BN / 2 : BN;
+    const int row_begin          = row_tile * rows_per_block;
+    const int token_begin        = token_tile * BM;
 
     auto stage_inputs = [&](int stage, int k_tile) {
         const int k_begin      = k_tile * BK;
@@ -167,9 +177,10 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
             const int logical_segment = task - row * Schedule::kSegmentsPerRow;
             const int logical_byte    = logical_segment * 16;
             const int physical_byte   = fp8_mma_shared_byte<Schedule>(row, logical_byte);
+            const int weight_row      = row_policy.weight_row(row_begin, row);
             cp_async<16, Schedule::kWeightCache>(
                 weight_stage + row * BK + physical_byte,
-                weight_codes + static_cast<std::int64_t>(row_begin + row) * Geometry::kInputRows +
+                weight_codes + static_cast<std::int64_t>(weight_row) * Geometry::kInputRows +
                     k_begin + logical_byte);
         }
     };
@@ -290,8 +301,8 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
 #pragma unroll
         for (int mma_row = 0; mma_row < Schedule::kMmaRows; ++mma_row) {
             const int local_row0  = warp_row * Schedule::kWarpRows + mma_row * 8 + accumulator_row;
-            const int parent_row0 = row_begin + local_row0;
-            const int parent_row1 = parent_row0 + 1;
+            const int parent_row0 = row_policy.weight_row(row_begin, local_row0);
+            const int parent_row1 = row_policy.weight_row(row_begin, local_row0 + 1);
             const std::uint32_t scale_bits = load_vec<std::uint32_t>(weight_scales + parent_row0);
             const float2 weight_scale      = bf16x2_bits_to_float2(scale_bits);
             float value00 =
@@ -327,7 +338,8 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
     }
     __syncthreads();
 
-    constexpr int vectors_per_token = BN / 8;
+    constexpr int stored_rows       = PairRows ? BN / 2 : BN;
+    constexpr int vectors_per_token = stored_rows / 8;
     constexpr int output_vectors    = BM * vectors_per_token;
     for (int task = tid; task < output_vectors; task += THREADS) {
         const int token_local = task / vectors_per_token;
@@ -336,11 +348,23 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
         if constexpr (FullTokens) {
             const uint4 values =
                 load_vec<uint4>(shared_output + token_local * output_stride + row_vector * 8);
-            output.store_vector(row_begin + row_vector * 8, token, values);
+            if constexpr (PairRows) {
+                const uint4 paired = load_vec<uint4>(shared_output + token_local * output_stride +
+                                                     stored_rows + row_vector * 8);
+                output.store_pair_vector(row_begin + row_vector * 8, token, values, paired);
+            } else {
+                output.store_vector(row_begin + row_vector * 8, token, values);
+            }
         } else if (token < tokens) {
             const uint4 values =
                 load_vec<uint4>(shared_output + token_local * output_stride + row_vector * 8);
-            output.store_vector(row_begin + row_vector * 8, token, values);
+            if constexpr (PairRows) {
+                const uint4 paired = load_vec<uint4>(shared_output + token_local * output_stride +
+                                                     stored_rows + row_vector * 8);
+                output.store_pair_vector(row_begin + row_vector * 8, token, values, paired);
+            } else {
+                output.store_vector(row_begin + row_vector * 8, token, values);
+            }
         }
     }
 }

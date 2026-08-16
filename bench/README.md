@@ -438,6 +438,22 @@ cmake --build build --parallel --target ninfer_q4_linear_swiglu_bench
   --t-sweep 1,2,4,8,16,24,32,40,48 --warmup 10 --repeat 50
 ```
 
+## FP8 LinearSwiGLU Op benchmark
+
+`ninfer_fp8_linear_swiglu_bench` measures the public row-scaled FP8 `[34816,5120] ->
+[17408,T]` profile. `--policy a8` measures the production resolver, including caller-owned
+activation workspace and the fused SwiGLU output; `--policy a16` measures the public A16 form.
+The Tensor Core percentage uses the RTX 5090 dense FP8/FP32-accumulate reference of 419 TFLOP/s
+only for extents that the production resolver sends to A8.
+
+```bash
+cmake --build build --parallel --target ninfer_fp8_linear_swiglu_bench
+./build/bench/ninfer_fp8_linear_swiglu_bench \
+  --policy a8 \
+  --t-sweep 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,24,32,40,48,1024 \
+  --warmup 5 --repeat 30
+```
+
 ## Q5 LinearAdd Op benchmark
 
 `ninfer_q5_linear_add_bench` measures the public Q5 `[5120,6144]` and `[5120,17408]`

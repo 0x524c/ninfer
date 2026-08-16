@@ -20,4 +20,10 @@ struct Fp8LinearA8ProductionSchedule<Fp8GdnInputGeometry> {
                                 Fp8MmaFragmentPipeline::PingPong, Fp8MmaRaster::TokenFast>;
 };
 
+template <>
+struct Fp8LinearA8ProductionSchedule<Fp8MlpGateUpGeometry> {
+    using Type = Fp8MmaSchedule<64, 128, 128, 2, 4, 2, 2, Cache::cg, Cache::cg,
+                                Fp8MmaFragmentPipeline::PingPong, Fp8MmaRaster::TokenFast>;
+};
+
 } // namespace ninfer::ops::detail
