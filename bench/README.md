@@ -258,15 +258,15 @@ cmake --build build --parallel --target ninfer_gdn_input_proj_bench
   --format fp8 --fp8-policy a8 --tokens 1,2,3,4,5,6,7,8 --cache cold
 ```
 
-## GDN input projection/convolution/snapshot Op benchmark
+## GDN input projection/convolution Snapshot/Record Op benchmark
 
-`ninfer_gdn_input_proj_conv_snapshot_bench` measures the public Qwen3.6 Q4/Q5, NVFP4, and W8
-`gdn_input_proj_conv_snapshot` forms for exact `B=1..8`. The timed body is exactly one complete
-public Op call; the benchmark does not include private launchers, candidate selection, duplicated
-compositions, or route labels. Its default `T=1..6` sweep is the production MTP verification
-interval. NVFP4 accepts
-the public `a16` and `a4` policies; the reported profile names the caller policy, not a private
-resolved route.
+`ninfer_gdn_input_proj_conv_snapshot_bench` measures the public Qwen3.6/Qwen3.8 Q4/Q5, NVFP4,
+row-scaled FP8, and W8 `gdn_input_proj_conv_snapshot` / `gdn_input_proj_conv_record` forms for exact
+`B=1..8`. The timed body is exactly one complete public Op call; the benchmark does not include
+private launchers, candidate selection, duplicated compositions, or route labels. Its default
+`T=1..6` sweep is the production MTP verification interval; Record begins at `T=2`.
+`--form snapshot|record|both` selects the semantic form. NVFP4 accepts public `a16`/`a4`, while FP8
+accepts `a16`/`a8`; the reported profile names caller policy, not a private resolved route.
 
 CUDA Graph replay is the default execution mode. The graph contains external timing event nodes
 around the complete Op body, while L2 eviction stays outside the timed interval. Cold-cache results
@@ -289,6 +289,9 @@ cmake --build build --parallel --target ninfer_gdn_input_proj_conv_snapshot_benc
 ./build/bench/ninfer_gdn_input_proj_conv_snapshot_bench \
   --format nvfp4 --tokens 6 --batch 3 --valid-columns 6,3,1 \
   --execution graph --cache cold --warmup 10 --repeat 100
+./build/bench/ninfer_gdn_input_proj_conv_snapshot_bench \
+  --format fp8 --fp8-policy a8 --form both --batch 1 --sweep 1:16 \
+  --execution both --cache both --warmup 5 --repeat 30
 ```
 
 `--execution eager|both` is available only to attribute launch behavior; it calls the same public

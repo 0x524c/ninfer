@@ -13,6 +13,11 @@
 
 namespace ninfer::ops::detail {
 
+enum class Fp8SmallTFinalization : std::uint8_t {
+    Elementwise,
+    RowVector,
+};
+
 template <int Values>
 struct Fp8ActivationPack {
     static_assert(Values == 8 || Values == 16 || Values == 32);
@@ -46,7 +51,8 @@ struct Fp8SmallTSharedStorage {
 
 template <class Geometry, int ActiveTokens, class Schedule, class Output,
           class Epilogue = Fp8IdentityEpilogue, class RowPolicy = Fp8GemvIdentityRows,
-          bool PairRows = false>
+          bool PairRows                      = false,
+          Fp8SmallTFinalization Finalization = Fp8SmallTFinalization::Elementwise>
 __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void fp8_small_t_kernel(
     const __nv_bfloat16* __restrict__ x, const std::uint8_t* __restrict__ weight_codes,
     const __nv_bfloat16* __restrict__ row_scales, Output output, Epilogue epilogue = {},
@@ -165,7 +171,30 @@ __global__ __launch_bounds__(Schedule::kThreads, Schedule::kMinBlocksPerSm) void
         }
     }
 
-    if constexpr (PairRows) {
+    if constexpr (Finalization == Fp8SmallTFinalization::RowVector) {
+        static_assert(!PairRows, "row-vector finalization does not pair output rows");
+        static_assert(Schedule::kTokenTile == ActiveTokens,
+                      "row-vector finalization requires one CTA to own the full token row");
+#pragma unroll
+        for (int local_row = 0; local_row < Schedule::kRowsPerWarp; ++local_row) {
+            const int parent_row = row_policy.weight_row(row_begin, local_row);
+            const float scale    = __bfloat162float(row_scales[parent_row]);
+            float projected[ActiveTokens];
+#pragma unroll
+            for (int local_token = 0; local_token < ActiveTokens; ++local_token) {
+                float total = 0.0F;
+#pragma unroll
+                for (int chain = 0; chain < Schedule::kAccumulatorChains; ++chain) {
+                    total += accumulators[local_row][local_token][chain];
+                }
+                total = warp_reduce_sum(total);
+                if (lane == 0) {
+                    projected[local_token] = epilogue.apply(parent_row, local_token, total * scale);
+                }
+            }
+            if (lane == 0) { output.store_row(parent_row, projected); }
+        }
+    } else if constexpr (PairRows) {
 #pragma unroll
         for (int local_token = 0; local_token < Schedule::kTokenTile; ++local_token) {
             const int token = token0 + local_token;

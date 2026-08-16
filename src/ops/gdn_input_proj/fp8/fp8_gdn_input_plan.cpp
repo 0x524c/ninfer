@@ -23,8 +23,21 @@ Fp8GdnInputRoute resolve_route(LinearPolicy policy, std::int32_t tokens) {
     return tokens >= 8 ? Fp8GdnInputRoute::A8 : Fp8GdnInputRoute::A16;
 }
 
-void launch_a16(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
-                cudaStream_t stream) {
+} // namespace
+
+std::size_t fp8_gdn_input_workspace_capacity_bytes(LinearPolicy policy, std::int32_t min_tokens,
+                                                   std::int32_t max_tokens) {
+    if (min_tokens <= 0 || max_tokens < min_tokens) {
+        throw std::invalid_argument("fp8 gdn_input_proj workspace: invalid token interval");
+    }
+    (void)resolve_route(policy, min_tokens);
+    return resolve_route(policy, max_tokens) == Fp8GdnInputRoute::A8
+               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8GdnInputGeometry::kInputRows)
+               : 0;
+}
+
+void fp8_gdn_input_a16_dispatch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
+                                cudaStream_t stream) {
     constexpr std::int32_t kQkvRows = 10240;
     constexpr std::int32_t kZRows   = 6144;
     constexpr std::int32_t kChunk   = kFp8LinearSmallTMax<Fp8GdnInputGeometry>;
@@ -48,31 +61,23 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
     }
 }
 
-} // namespace
-
-std::size_t fp8_gdn_input_workspace_capacity_bytes(LinearPolicy policy, std::int32_t min_tokens,
-                                                   std::int32_t max_tokens) {
-    if (min_tokens <= 0 || max_tokens < min_tokens) {
-        throw std::invalid_argument("fp8 gdn_input_proj workspace: invalid token interval");
-    }
-    (void)resolve_route(policy, min_tokens);
-    return resolve_route(policy, max_tokens) == Fp8GdnInputRoute::A8
-               ? fp8_a8_workspace_capacity_bytes(max_tokens, Fp8GdnInputGeometry::kInputRows)
-               : 0;
+void fp8_gdn_input_a8_dispatch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
+                               WorkspaceArena& workspace, cudaStream_t stream) {
+    auto scope                   = workspace.scope();
+    const Fp8A8Workspace scratch = allocate_fp8_a8_workspace(workspace, x.ne[1], weight.k);
+    fp8_gdn_input_a8_launch(x, weight, qkv, z, scratch, stream);
 }
 
 void fp8_gdn_input_dispatch(const Tensor& x, const Weight& weight, Tensor& qkv, Tensor& z,
                             LinearPolicy policy, WorkspaceArena* workspace, cudaStream_t stream) {
     if (resolve_route(policy, x.ne[1]) == Fp8GdnInputRoute::A16) {
-        launch_a16(x, weight, qkv, z, stream);
+        fp8_gdn_input_a16_dispatch(x, weight, qkv, z, stream);
         return;
     }
     if (workspace == nullptr) {
         throw std::invalid_argument("fp8 A8 gdn_input_proj requires caller workspace");
     }
-    auto scope                   = workspace->scope();
-    const Fp8A8Workspace scratch = allocate_fp8_a8_workspace(*workspace, x.ne[1], weight.k);
-    fp8_gdn_input_a8_launch(x, weight, qkv, z, scratch, stream);
+    fp8_gdn_input_a8_dispatch(x, weight, qkv, z, *workspace, stream);
 }
 
 } // namespace ninfer::ops::detail

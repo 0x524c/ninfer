@@ -122,6 +122,8 @@ add_library(ninfer_ops STATIC
   ops/gdn_input_proj/fp8/fp8_gdn_input_small_t.cu
   ops/gdn_input_proj/fp8/fp8_gdn_input_a8.cu
   ops/gdn_input_proj/fp8/fp8_gdn_input_plan.cpp
+  ops/gdn_input_proj/fp8/fp8_gdn_conv_fused.cu
+  ops/gdn_input_proj/fp8/fp8_gdn_conv_plan.cpp
   ops/gdn_input_proj/nvfp4/nvfp4_gdn_input_decode.cu
   ops/gdn_input_proj/nvfp4/nvfp4_gdn_input_small_t.cu
   ops/gdn_input_proj/nvfp4/nvfp4_gdn_input_w4a4.cu

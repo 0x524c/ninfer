@@ -45,8 +45,10 @@ L5/L6 在 `T<25` 使用 A16、`T>=25` 使用 A8；R1 在 `T<22` 使用 A16、`T>
 在 `T<25` 使用 A16、`T>=25` 使用 A8。每个实际 Op 拥有自己的 resolver，并依据自身完整语义
 调用确定 route。A1 直接写入
 Q/K/gate/V，G1 直接写入 QKV/Z，M1 直接写入最终
-SwiGLU 结果，R1/R2 直接完成原地 residual 更新；G2/G3 仍待完成。Artifact 中另外 112 个
-NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称相同便假定已覆盖。
+SwiGLU 结果，R1/R2 直接完成原地 residual 更新；G2/G3 也已完成独立的 snapshot/record route、
+workspace、完整公式验证和 public benchmark。当前只剩 L1/E1 两个 `[248320,5120]` registration。
+Artifact 中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format
+名称相同便假定已覆盖。
 
 ## 2. 固定执行事实
 
@@ -149,24 +151,24 @@ Generic Linear 是同一 geometry 下实现实际 Op 的起步形式，不是一
 
 其中有以下约束：
 
-- [ ] 不设置“先完成全部 L1..L6，再统一开始 fused Op”的全局门槛。L2 调优后立即做 A1；L3
+- [x] 不设置“先完成全部 L1..L6，再统一开始 fused Op”的全局门槛。L2 调优后立即做 A1；L3
   调优后立即做 G1/G2/G3；L4/L5/L6 同理，不等待其他 geometry。
-- [ ] L2..L6 的 generic registration 提供最直接的数值验证和 kernel 调优入口，但 Linear 自身不是
+- [x] L2..L6 的 generic registration 提供最直接的数值验证和 kernel 调优入口，但 Linear 自身不是
   对应工作流的完成点。实际 consumer 的 epilogue、输出布局、非线性或状态效果完成之前，该
   geometry 的 Op 工作仍未完成。
-- [ ] Linear 调优的产物必须是可直接改造成实际 Op 的 kernel primitive、mainloop、schedule、
+- [x] Linear 调优的产物必须是可直接改造成实际 Op 的 kernel primitive、mainloop、schedule、
   output-policy 接口和 workspace recipe，而不是只能写 dense BF16 输出的封闭实现。
-- [ ] 当前 geometry 的 Linear 必须先完成完整正 `T` domain、全部可达 arithmetic profile、
+- [x] 当前 geometry 的 Linear 必须先完成完整正 `T` domain、全部可达 arithmetic profile、
   latency-sensitive interval、throughput anchor、workspace 和 production route；只有 `T=1` 或
   provisional mainloop 不能触发实际 Op 开发。
-- [ ] 当前 Linear 完成后立即接入实际 Op；在这两者之间不要转去批量实现另一个 Linear geometry，
+- [x] 当前 Linear 完成后立即接入实际 Op；在这两者之间不要转去批量实现另一个 Linear geometry，
   也不要继续开展与实际 consumer 无关的候选扩张或性能工作。
-- [ ] 实际 Op 先采用已经完成的 Linear route 候选和分界，再用完整 public call 测量 epilogue/post
+- [x] 实际 Op 先采用已经完成的 Linear route 候选和分界，再用完整 public call 测量 epilogue/post
   的影响。只有该测量可以调整最终 route；private kernel-only 结果不能单独决定实际 Op route。
-- [ ] 复用 Linear kernel 不等于在 public 层调用 `linear`，也不要求先物化 dense BF16 projection。
+- [x] 复用 Linear kernel 不等于在 public 层调用 `linear`，也不要求先物化 dense BF16 projection。
   实际 Op 直接负责最终输出与状态副作用；私有 BF16 中间量只是某条 route 的 arithmetic profile，
   不是 oracle 必须复制的语义边界。
-- [ ] 不为实际 Op 复制 FP8 decode、activation quantization 或 contraction mainloop。这些共性实现
+- [x] 不为实际 Op 复制 FP8 decode、activation quantization 或 contraction mainloop。这些共性实现
   归 `src/ops/linear` 所有；实际 Op 只增加自己的 output policy、epilogue/finalizer、post 和语义
   dispatch。
 
@@ -291,10 +293,37 @@ roofline 目标现已共同完成，因此 L2→A1 纵向工作流已退出。
   `61.408 -> 66.848 us`（`+8.86%`）；`T=7 -> 8` route seam 略降至 `66.528 us`。完整 G1
   benchmark 因而支持与 L3 不同的 boundary。
 
-L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和吞吐锚点已经完成。G2/G3
-仍需在各自的显式 `B/W/state` public domain 上独立资格验证，不能由本里程碑代替。
+L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和吞吐锚点已经完成。
 
-### 2.8 当前 L4→M1 里程碑
+### 2.8 当前 L3→G2/G3 里程碑
+
+`[N,K]=[16384,5120]` 的 G2 snapshot 与 G3 record 已在各自完整 public form 上完成资格验证：
+
+- 两者复用 L3/G1 的 FP8 decoder、GEMV/small-T mainloop、A8 quantization/MMA 和 activation
+  workspace；FP8 small-T 增加 row-vector finalization，并与 NVFP4 共用 format-neutral GDN
+  convolution output policy。G2 的 materialized route 自有 `BF16 [10240,B*W]` plane，G3 直接写
+  caller-owned `conv_record`；没有复制 contraction mainloop；
+- `B=1` 的 A16 route 在 `W=1..3`、`W=7..10` 融合 projection/convolution，在 `W=4..6` 和
+  `W>=11` materialize；`AllowA8` 保留此前两段 A16 winner，并从 `W=10` 使用 materialized A8。
+  Snapshot inclusive capacity 会显式保留 `W=4..6` 的非单调 materialized witness，不能只查看
+  interval 右端点；
+- batched G2 与 G3 分别依据完整 Op 实测拥有不同分界：G2 的 `AllowA8` 在 `B*W>=9` 使用 A8，
+  G3 在 `B*W>=8` 使用 A8；较小 aggregate extent 与全部 batched `A16Only` 使用 materialized
+  A16。两者没有借 route 统一来制造实现 parity；
+- 开发期一次性测量了 `form × B=1..8 × public W × fused-A16/materialized-A16/
+  materialized-A8` 完整合法候选矩阵，固化 resolver 后已删除内部 benchmark；长期 benchmark 只
+  调用 public API；
+- G2 的独立 FP64 oracle 覆盖 projection、convolution、SiLU、四个输出、snapshot、ragged tail、
+  same-row initial/destination overlap 和未写 state；G3 的独立完整公式 oracle直接覆盖 record
+  publication 和 source-state bitwise preservation，snapshot/record parity 不是 G3 的判据；capacity
+  query 与 execution high-water 一致，Q4/Q5、W8 和 NVFP4 form 保持通过；
+- RTX 5090、CUDA 13.1、10 次 public-call 复审中，`B=1` graph/cold G2 的 `W=1..16` 为
+  `58.624..70.944 us`，最大相邻增幅为 `W=6 -> 7` 的 `+6.42%`；G3 的 `W=2..16` 为
+  `58.624..70.912 us`，最大相邻增幅为 `W=3 -> 4` 的 `+3.87%`。`B=2,W=1..6` 的两个独立
+  route seam 也保持平缓，`B=8,W=16` graph/cold 分别为 `87.296 us` 和 `85.280 us`；同一
+  public sweep 也覆盖 eager/captured 与 cold/warm。
+
+### 2.9 当前 L4→M1 里程碑
 
 `[N,K]=[34816,5120]` 的 generic `linear` 与 M1 `linear_swiglu` 已完成以下资格验证：
 
@@ -411,8 +440,8 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 | A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [x]（完整正 T；T<=10/A16、T>=11/A8） |
 | L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [x]（完整正 T；T<=10/A16、T>=11/A8） |
 | G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [x]（完整正 T；T<=7/A16、T>=8/A8） |
-| G2 | fused projection/state | `gdn_input_proj_conv_snapshot` | `[16384,5120]` | Q/K/V/Z 加 convolution-state snapshot | 同 48 个 parent | [ ] |
-| G3 | fused projection/record | `gdn_input_proj_conv_record` | `[16384,5120]` | Q/K/V/Z 加 replay projection record | 同 48 个 parent | [ ] |
+| G2 | fused projection/state | `gdn_input_proj_conv_snapshot` | `[16384,5120]` | Q/K/V/Z 加 convolution-state snapshot | 同 48 个 parent | [x]（完整 B/W domain；独立 snapshot route） |
+| G3 | fused projection/record | `gdn_input_proj_conv_record` | `[16384,5120]` | Q/K/V/Z 加 replay projection record | 同 48 个 parent | [x]（完整 B/W domain；独立 record route） |
 | L4 | generic | `linear` | `[34816,5120]` | `BF16 [34816,T]` | M1 工作流的 Linear 起步项 | [x]（完整正 T；T=1/A8、T=2..4/A16、T>=5/A8） |
 | M1 | fused projection | `linear_swiglu` | `[34816,5120]` | `BF16 [17408,T]` SwiGLU | layer `56..63`，8 个 parent | [x]（完整正 T；T=1/A8、T=2/A16、T>=3/A8） |
 | L5 | generic | `linear` | `[5120,6144]` | `BF16 [5120,T]` | R1 工作流的 Linear 起步项 | [x]（完整正 T；T<25/A16、T>=25/A8） |
@@ -582,9 +611,9 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
 
 ### G2 — row-scaled FP8 `gdn_input_proj_conv_snapshot`
 
-- [ ] 接纳与 L3/G1 相同的完整 FP8 parent `[16384,5120]`，以及 artifact 存储
+- [x] 接纳与 L3/G1 相同的完整 FP8 parent `[16384,5120]`，以及 artifact 存储
   `[4,10240]` convolution 的 runtime transpose view `conv_weight BF16 [10240,4]`。
-- [ ] 接受：
+- [x] 接受：
 
   ```text
   x                   BF16 [5120,W,B]
@@ -597,7 +626,7 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
   `B=1` 接受任意正 `W`；`B=2..8` 接受 `W=1..16`。每个 mixed-width valid extent 位于
   `[1,W]`；每个 `initial_state_slots[b]` 位于 `[0,Slots)`，caller 预留的完整
   `[snapshot_base_slots[b],snapshot_base_slots[b]+W)` 也必须位于 `[0,Slots)`。
-- [ ] 写入：
+- [x] 写入：
 
   ```text
   query BF16 [2048,W,B]
@@ -606,31 +635,31 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
   z     BF16 [6144,W,B]
   ```
 
-- [ ] 从每个选中的 width-three history 开始，仅对 projection 后的 Q/K/V 执行 width-four
+- [x] 从每个选中的 width-three history 开始，仅对 projection 后的 Q/K/V 执行 width-four
   depthwise convolution 和 SiLU；Z bypass convolution 与 state。
-- [ ] 把每个有效 destination history 写到
+- [x] 把每个有效 destination history 写到
   `[snapshot_base_slots[b], snapshot_base_slots[b]+valid_columns[b])`，其余 state word 保持不变。
   Query/key/value 的 invalid tail 精确写零；Z 对每个安全的物理 `B*W` input column 都执行
   projection，保持现有语义合同。
-- [ ] 初始 history 完成加载后，保持现有合法的 same-row initial/destination overlap；保留 caller
+- [x] 初始 history 完成加载后，保持现有合法的 same-row initial/destination overlap；保留 caller
   对每行 non-destructive state interval 的前置条件。不能为了 host-side alias validation 同步读取
   device selector。
-- [ ] 注册 `AllowA8`，扩展 policy-bearing snapshot capacity query，覆盖 exact FP8 profile、
+- [x] 注册 `AllowA8`，扩展 policy-bearing snapshot capacity query，覆盖 exact FP8 profile、
   exact `B` 和请求的每个 `W` inclusive interval。
-- [ ] G1 output policy 做通后，立即把同一 L3 mainloop 接入 snapshot post；默认以刚得到的 L3/G1
+- [x] G1 output policy 做通后，立即把同一 L3 mainloop 接入 snapshot post；默认以刚得到的 L3/G1
   route 为起点，再用 G2 完整 public call 决定 projection+post route。不得用只测 projection 的
   结果替代。
-- [ ] 扩展独立 complete-Op oracle，覆盖 projection、convolution、SiLU、四个输出、所有写入的
+- [x] 扩展独立 complete-Op oracle，覆盖 projection、convolution、SiLU、四个输出、所有写入的
   snapshot、invalid-tail zeroing 和未修改 state region。覆盖 dense/ragged batch、相关 initial-slot
   关系、`B=1`、`B=8`、`W=1`、`W=16` 与全部 private route boundary，但不构造无意义的笛卡尔积。
-- [ ] 保持 Q4/Q5、W8 和 NVFP4 snapshot form。
-- [ ] 在 public snapshot/record benchmark 中加入 FP8，覆盖 eager/captured、cold/warm weight、
+- [x] 保持 Q4/Q5、W8 和 NVFP4 snapshot form。
+- [x] 在 public snapshot/record benchmark 中加入 FP8，覆盖 eager/captured、cold/warm weight、
   target width `1..6` 和 public boundary width。
 
 ### G3 — row-scaled FP8 `gdn_input_proj_conv_record`
 
-- [ ] 接纳相同完整 FP8 parent `[16384,5120]` 和 `conv_weight BF16 [10240,4]`。
-- [ ] 接受：
+- [x] 接纳相同完整 FP8 parent `[16384,5120]` 和 `conv_weight BF16 [10240,4]`。
+- [x] 接受：
 
   ```text
   x                   BF16 [5120,W,B]
@@ -642,21 +671,21 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
 
   执行 domain 为 `B=1..8`、`W=2..16`；每个 supplied valid extent 位于 `[1,W]`，每个
   `initial_state_slots[b]` 位于 `[0,Slots)`。
-- [ ] 写入 query/key `BF16 [2048,W,B]`、value/z `BF16 [6144,W,B]`，并把 convolution 所消费的
+- [x] 写入 query/key `BF16 [2048,W,B]`、value/z `BF16 [6144,W,B]`，并把 convolution 所消费的
   represented projected Q/K/V column 写入 `conv_record`。
-- [ ] 应用与 G2 相同的 projection、width-four convolution、SiLU 和 Z-bypass 语义，但不得修改
+- [x] 应用与 G2 相同的 projection、width-four convolution、SiLU 和 Z-bypass 语义，但不得修改
   `conv_states`。只有每行 `conv_record` 的有效 prefix 有语义定义；query/key/value invalid tail
   精确为零，Z 覆盖每个物理 column。
-- [ ] 按现有 record 合同要求 source state、parent、input、record、outputs 与 live workspace
+- [x] 按现有 record 合同要求 source state、parent、input、record、outputs 与 live workspace
   相互分离。
-- [ ] 注册 `AllowA8`，扩展 record capacity query，覆盖 exact FP8 profile、exact `B` 与请求的
+- [x] 注册 `AllowA8`，扩展 record capacity query，覆盖 exact FP8 profile、exact `B` 与请求的
   每个 `W` inclusive interval；caller-owned `conv_record` 不是 workspace。
-- [ ] 与 G2 共享刚形成的 L3/G1 projection 模板，并立即接入 record post；默认从 L3/G1 route
+- [x] 与 G2 共享刚形成的 L3/G1 projection 模板，并立即接入 record post；默认从 L3/G1 route
   开始，只依据 G3 完整 public benchmark 调整自己的分界。
-- [ ] 扩展独立 complete-Op oracle，覆盖 projection、convolution、SiLU、Z、record publication、
+- [x] 扩展独立 complete-Op oracle，覆盖 projection、convolution、SiLU、Z、record publication、
   ragged-tail 效果，以及 source state 的精确保持。
-- [ ] 保持 Q4/Q5、W8 和 NVFP4 replay-record form。
-- [ ] 通过同一 public snapshot/record benchmark 测量 G3 的 target 与 public-domain boundary；
+- [x] 保持 Q4/Q5、W8 和 NVFP4 replay-record form。
+- [x] 通过同一 public snapshot/record benchmark 测量 G3 的 target 与 public-domain boundary；
   private projection-only timing 不能证明 G3 性能。
 
 ## 9. Text MLP gate/up 投影
@@ -745,25 +774,25 @@ R1 与 R2 共同还需：
 
 除各 Op 自身的正确性与性能外，每条 L→实际 Op 工作流还必须满足：
 
-- [ ] 映射固定为 A1←L2、G1/G2/G3←L3、M1←L4、R1←L5、R2←L6；实现、调优记录和
+- [x] 映射固定为 A1←L2、G1/G2/G3←L3、M1←L4、R1←L5、R2←L6；实现、调优记录和
   plan/config 使用同一 geometry 标识，不把两端当成无关项目。
-- [ ] 不存在“全部 generic Linear 完成”的前置里程碑，但当前 L 项必须先完成自己的完整正 extent
+- [x] 不存在“全部 generic Linear 完成”的前置里程碑，但当前 L 项必须先完成自己的完整正 extent
   domain、arithmetic profile、workspace 和 production route。随后在同一开发序列中立即增加对应
   output policy、epilogue 或 post，并转向实际 Op 的 correctness 与 benchmark。
-- [ ] Generic Linear exact registration、oracle case 和 benchmark point 可以保留，作为最小
+- [x] Generic Linear exact registration、oracle case 和 benchmark point 可以保留，作为最小
   contraction 验证入口；它们的保留不构成独立实施阶段，也不能替代实际 consumer 的完成证据。
-- [ ] Weight validation、row-FP8 decode 和 activation quantization 使用 Linear-owned 共性实现；
+- [x] Weight validation、row-FP8 decode 和 activation quantization 使用 Linear-owned 共性实现；
   实际 Op 目录中不出现语义相同的复制版本。
-- [ ] Latency-sensitive/throughput 各区域的实际 Op 候选由刚完成调优的同 geometry Linear kernel
+- [x] Latency-sensitive/throughput 各区域的实际 Op 候选由刚完成调优的同 geometry Linear kernel
   primitive/mainloop/schedule 改造而来。它可以使用不同 output visitor、epilogue 或 post kernel，
   但不能另写等价 contraction mainloop。
-- [ ] 实际 Op workspace query 复用相同 activation workspace recipe，并追加本 Op 所需 transient
+- [x] 实际 Op workspace query 复用相同 activation workspace recipe，并追加本 Op 所需 transient
   allocation；query 与 execution 使用同一 plan facts。
-- [ ] Linear benchmark 给出完整候选和 route 分界后，立即测量相邻的实际 Op extent。若最终 route
+- [x] Linear benchmark 给出完整候选和 route 分界后，立即测量相邻的实际 Op extent。若最终 route
   相同，route test 固定该关系；若不同，只记录完整 public-call 中 epilogue/post 导致的变化。
-- [ ] Linear oracle 证明 contraction；实际 Op complete-formula oracle 独立证明最终公式和副作用。
+- [x] Linear oracle 证明 contraction；实际 Op complete-formula oracle 独立证明最终公式和副作用。
   两项在同一纵向工作流内连续完成，但不能互相替代。
-- [ ] 最终代码中没有为衔接 Linear 与实际 Op 而保留的 duplicate decoder、duplicate quantizer、
+- [x] 最终代码中没有为衔接 Linear 与实际 Op 而保留的 duplicate decoder、duplicate quantizer、
   duplicate route table、只能 dense-output 的封闭 kernel 分叉或落选实现。
 
 ## 12. 已有支持与排除项证明
