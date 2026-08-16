@@ -34,11 +34,10 @@ MTP-private 和 Vision 权重的 format 与 geometry 没有变化，因此不需
 `embedding` 和 `linear` registration 覆盖，不新增 MTP 专用 Op。
 
 本清单从 14 个未完成的完整 registration 开始：6 个 generic FP8 Linear、1 个 embedding，以及
-7 个复用 Linear contraction 实现的 fused/专用 projection registration。当前 L2 generic Linear
-已经完成：Op 层已接纳 `[14336,5120]` 的 `FP8_E4M3FN_ROW_BF16S` / `RowScale`、全部正 `T`
-语义、A16/A8 arithmetic profile、workspace、完整 hot interval 和 `T=1024` 吞吐锚点；最终
-production boundary 为 `T=1` 使用 A16、每个 `T>=2` 使用 A8。相邻 A1 仍只覆盖 `T=1`，因此
-下一项是继续完成 A1，而不是批量开始另一个 Linear geometry。Artifact 中另外 112 个 NVFP4
+7 个复用 Linear contraction 实现的 fused/专用 projection registration。当前 `[14336,5120]`
+纵向工作流的 L2 generic Linear 与 A1 `attn_input_proj` 均已完成：两者都接纳全部正 `T`、A16/A8
+arithmetic profile 和 caller workspace，并采用 `T=1` 使用 A16、每个 `T>=2` 使用 A8 的最终
+production boundary；A1 直接写入 Q/K/gate/V 四个 allocation。Artifact 中另外 112 个 NVFP4
 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称相同便假定已覆盖。
 
 ## 2. 固定执行事实
@@ -233,13 +232,14 @@ boundary，不能为了复用 rank-two 曲线而把状态 Op 的 public domain �
 第一个代表性 geometry 已固定为 `[N,K]=[14336,5120]`，相邻实际 consumer 是 A1
 `attn_input_proj`。当前完成事实如下：
 
-- generic `linear` 已注册该 geometry 的全部正 `T`；`A16Only` 与 `AllowA8` 均合法，`AllowA8`
-  在 `T=1` 解析为 A16、在每个 `T>=2` 解析为 A8 Tensor Core route。Fused `attn_input_proj`
-  仍只注册 `T=1`；
-- T=1 的 production mainloop 由 Linear 所有，并以 output policy 分别写 dense Linear 输出和 A1
-  的 Q/K/gate/V 四个最终 allocation；A1 没有物化 packed parent 输出，也没有复制 FP8 decode；
+- generic `linear` 与 fused `attn_input_proj` 都已注册该 geometry 的全部正 `T`；`A16Only` 与
+  `AllowA8` 均合法，`AllowA8` 在 `T=1` 解析为 A16、在每个 `T>=2` 解析为 A8 Tensor Core route；
+- A16 GEMV、A8 activation quantization/workspace、MMA mainloop 和 production schedule 由 Linear
+  所有；A1 只替换 output policy，直接写 Q/K/gate/V 四个最终 allocation，没有物化 packed parent
+  输出或复制 contraction 实现；
 - 独立 fixture 精确解码 E4M3FN code 与 BF16 row scale；public Linear 的 convenience/`AllowA8`
-  form、T=1024 A8 form 和 public A1 的四个语义 row range 均已直接通过同一 naive-FP64 oracle；
+  form，以及 public A1 的 A16/A8、tail、T=1024 和四个语义 row range，均已直接通过同一
+  naive-FP64 oracle；
 - RTX 5090、CUDA 13.1、cold-cache、80 次 public-call 测量中，Linear A16 median/min/p95 为
   `50.464/49.632/51.200 us`，one-read effective bandwidth 为 `1455.8 GB/s`，即 sustained-read
   probe 的 `86.94%`；A1 的 A16/AllowA8 median 分别是 `50.432/50.464 us`，split-output
@@ -247,13 +247,15 @@ boundary，不能为了复用 rank-two 曲线而把状态 Op 的 public domain �
 - 原生 FP8 MMA 候选的最佳 public median 为 `69.632 us`，未达到 direct route；BF16 packed
   accumulation 不满足 A16 数值 criterion，因此 T=1 保留 direct route；
 - T=1024 A8 public Linear median 为 `364.672 us`、`412.22 TFLOP/s`，达到 FP32 accumulation
-  稠密峰值 `419 TFLOP/s` 的 `98.38%`，完成该 throughput anchor。
+  稠密峰值 `419 TFLOP/s` 的 `98.38%`；public A1 为 `363.776 us`、`413.23 TFLOP/s`，达到
+  `98.62%`。A1 的 `T=1` median 为 `50.432 us`，`T=2..48` 保持在 `60.672..62.720 us`，因此
+  split-output 没有改变 L2 route boundary 或引入额外 latency cliff。
 
 T=1 没有达到早期提出的 `<=48.75 us` / sustained-read `>=90%` 参考目标；在 direct A16、原生
 FP8 MMA 和 BF16 packed accumulation 的实测与数值筛选后，`50.304 us` direct A16 仍是最终
-production 选择。该未达到的参考值记录为测量结果，不再作为 L2 的退出阻塞。完整 `T=1..48`
-曲线、A16/A8 boundary、workspace、正 `T` domain 和 `T=1024` roofline 目标现已共同完成，因此
-L2 已退出；下一步沿同一 geometry 继续 A1，并在 split-output public call 上重新验证 route。
+production 选择。该未达到的参考值记录为测量结果，不再作为 L2/A1 的退出阻塞。完整
+`T=1..48` 曲线、A16/A8 boundary、workspace、正 `T` domain、四输出 oracle 和 `T=1024`
+roofline 目标现已共同完成，因此 L2→A1 纵向工作流已退出。
 
 ## 3. Artifact 到 consumer 的完整账本
 
@@ -302,7 +304,7 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 | L1 | generic | `linear` | `[248320,5120]` | `BF16 [248320,T]` | full head，1 个 parent | [ ] |
 | E1 | gather | `embedding` | `[248320,5120]` | gather `BF16 [5120,T]` | embedding，1 个 parent | [ ] |
 | L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [x]（T=1/A16、T>=2/A8；完整正 T 与性能目标已完成） |
-| A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [ ]（T=1 已接入） |
+| A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [x]（完整正 T；T=1/A16、T>=2/A8） |
 | L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [ ] |
 | G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [ ] |
 | G2 | fused projection/state | `gdn_input_proj_conv_snapshot` | `[16384,5120]` | Q/K/V/Z 加 convolution-state snapshot | 同 48 个 parent | [ ] |
@@ -395,14 +397,14 @@ contraction。它是独立工作流，不参与 Linear 到实际 projection Op �
 
 ### A1 — 单 parent row-scaled FP8 `attn_input_proj`
 
-- [ ] 在 `[14336,5120]` 纵向工作流中，L2 完成数值验证与调优、形成 output-policy 可扩展的
+- [x] 在 `[14336,5120]` 纵向工作流中，L2 完成数值验证与调优、形成 output-policy 可扩展的
   kernel 模板后，立即把其 dense-output 路径改造成 A1 的四输出形式；不等待其他 L 项完成。
-- [ ] 复用 L2 的 FP8 decode、geometry、A16/A8 contraction mainloop、schedule 候选和 activation
+- [x] 复用 L2 的 FP8 decode、geometry、A16/A8 contraction mainloop、schedule 候选和 activation
   workspace recipe，不新增独立 FP8 contraction 实现。
-- [ ] 接纳一个完整 `query_key_gate_value` parent `[14336,5120]`；不得接纳持久化逻辑 row child
+- [x] 接纳一个完整 `query_key_gate_value` parent `[14336,5120]`；不得接纳持久化逻辑 row child
   或多个 FP8 weight argument。
-- [ ] 接受连续 `x BF16 [5120,T]`，覆盖每个正 `T`。
-- [ ] 写入四个彼此独立的连续 BF16 输出：
+- [x] 接受连续 `x BF16 [5120,T]`，覆盖每个正 `T`。
+- [x] 写入四个彼此独立的连续 BF16 输出：
 
   ```text
   q    [6144,T]
@@ -411,7 +413,7 @@ contraction。它是独立工作流，不参与 Linear 到实际 projection Op �
   v    [1024,T]
   ```
 
-- [ ] 严格按下列物理 parent row order 解释权重：
+- [x] 严格按下列物理 parent row order 解释权重：
 
   ```text
   query       [0,6144)
@@ -421,17 +423,17 @@ contraction。它是独立工作流，不参与 Linear 到实际 projection Op �
   ```
 
   Public argument order 为 `q, gate, k, v`，有意不同于物理 parent 顺序。
-- [ ] 从同一 represented `x` 计算四个完整逻辑 projection；不存在可观察的 packed
+- [x] 从同一 represented `x` 计算四个完整逻辑 projection；不存在可观察的 packed
   `BF16 [14336,T]` 输出。
-- [ ] 要求 input、完整 parent、live workspace 和四个输出 allocation 互不重叠。
-- [ ] 注册 `AllowA8`，并扩展 `attn_input_proj_workspace_capacity_bytes`，覆盖 exact FP8
+- [x] 要求 input、完整 parent、live workspace 和四个输出 allocation 互不重叠。
+- [x] 注册 `AllowA8`，并扩展 `attn_input_proj_workspace_capacity_bytes`，覆盖 exact FP8
   problem 和每个正 `T` interval。
-- [ ] 默认采用 L2 的 route 分界；如果 split-output epilogue 改变最优分界，只能依据 A1 的完整
+- [x] 默认采用 L2 的 route 分界；如果 split-output epilogue 改变最优分界，只能依据 A1 的完整
   public benchmark 调整，并在 route test 中固定新分界。
-- [ ] 扩展独立 full-Op oracle，检查所有四段 row、语义输出位置和全部输出，而不是只检查 aggregate
+- [x] 扩展独立 full-Op oracle，检查所有四段 row、语义输出位置和全部输出，而不是只检查 aggregate
   projection error 或与 L2 做 parity。
-- [ ] 保持 two-parent 27B Q4/Q5、single-parent 27B BF16/NVFP4 和 35B W8 admission。
-- [ ] 扩展 public Attention-input benchmark，覆盖每个 `T=1..48`、route 分界和主要 `T=1024`
+- [x] 保持 two-parent 27B Q4/Q5、single-parent 27B BF16/NVFP4 和 35B W8 admission。
+- [x] 扩展 public Attention-input benchmark，覆盖每个 `T=1..48`、route 分界和主要 `T=1024`
   prefill 点。
 
 ## 8. GDN 输入投影族

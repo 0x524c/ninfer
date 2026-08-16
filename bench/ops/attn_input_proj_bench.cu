@@ -382,17 +382,9 @@ void run_w8_qkv(const Options& options, DeviceBuffer& flush, cudaStream_t stream
 
 void run_fp8(const Options& options, DeviceBuffer& flush, cudaStream_t stream,
              std::vector<Result>& results) {
-    if (std::find(options.tokens.begin(), options.tokens.end(), 1) == options.tokens.end()) {
-        if (options.format == Format::Fp8) {
-            throw std::invalid_argument("FP8 attn_input_proj benchmark currently admits only T=1");
-        }
-        return;
-    }
-    Options point = options;
-    point.tokens  = {1};
-    auto weight   = bench::make_fp8_weight(14336, 5120);
-    run_four_output(point, "fp8", QType::FP8_E4M3FN_ROW_BF16S, point.fp8_policy, false, 5120, 6144,
-                    1024, 14336, weight, flush, stream, results);
+    auto weight = bench::make_fp8_weight(14336, 5120);
+    run_four_output(options, "fp8", QType::FP8_E4M3FN_ROW_BF16S, options.fp8_policy, false, 5120,
+                    6144, 1024, 14336, weight, flush, stream, results);
 }
 
 void write_csv(const Options& options, const std::vector<Result>& results) {

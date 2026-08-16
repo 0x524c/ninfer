@@ -1,10 +1,11 @@
 #include "ninfer/ops/attn_input_proj.h"
 
 #include "ops/attn_input_proj/bf16/bf16_attn_input_plan.h"
-#include "ops/attn_input_proj/fp8/fp8_attn_input.h"
+#include "ops/attn_input_proj/fp8/fp8_attn_input_plan.h"
 #include "ops/attn_input_proj/nvfp4/nvfp4_attn_input_plan.h"
 #include "ops/attn_input_proj/q4_q5/q4_q5_attn_input_plan.h"
 #include "ops/attn_input_proj/w8/w8_attn_input_plan.h"
+#include "ops/linear/fp8/fp8_config.h"
 #include "ops/linear/fp8/fp8_format.h"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_format.h"
@@ -133,9 +134,7 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& q, Te
         constexpr std::int32_t kKvRows = 1024;
         constexpr std::int32_t kRows   = 14336;
         const std::int32_t cols        = x.ne[1];
-        if (cols != 1) {
-            throw std::invalid_argument("FP8 attn_input_proj currently admits only T=1");
-        }
+        if (cols <= 0) { throw std::invalid_argument("attn_input_proj: T must be positive"); }
         if (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA8) {
             throw std::invalid_argument("FP8 attn_input_proj admits only A16 or A8");
         }
@@ -148,7 +147,7 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& q, Te
         if (weight.n != kRows || weight.k != kHidden) {
             throw std::invalid_argument("fp8 attn_input_proj: unsupported weight shape");
         }
-        detail::fp8_attn_input_launch(x, weight, q, gate, k, v, stream);
+        detail::fp8_attn_input_dispatch(x, weight, q, gate, k, v, policy, workspace, stream);
         return;
     }
 
@@ -195,11 +194,11 @@ std::size_t attn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::in
         }
         return detail::nvfp4_attn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
     case QType::FP8_E4M3FN_ROW_BF16S:
-        if (parent_rows != 14336 || input_rows != 5120 || min_tokens != 1 || max_tokens != 1 ||
-            (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA8)) {
+        if (parent_rows != detail::Fp8AttnInputGeometry::kOutputRows ||
+            input_rows != detail::Fp8AttnInputGeometry::kInputRows) {
             throw std::invalid_argument("attn_input_proj workspace: unsupported FP8 profile");
         }
-        return 0;
+        return detail::fp8_attn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
     case QType::W8G32_F16S:
         if (parent_rows != 9216 || input_rows != 2048 || policy != LinearPolicy::A16Only) {
             throw std::invalid_argument("attn_input_proj workspace: unsupported W8 profile");

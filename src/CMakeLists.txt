@@ -102,7 +102,9 @@ add_library(ninfer_ops STATIC
   ops/attn_input_proj/bf16/bf16_attn_input_gemm_mma.cu
   ops/attn_input_proj/bf16/bf16_attn_input_small_t.cu
   ops/attn_input_proj/bf16/bf16_attn_input_plan.cpp
-  ops/attn_input_proj/fp8/fp8_attn_input.cu
+  ops/attn_input_proj/fp8/fp8_attn_input_decode.cu
+  ops/attn_input_proj/fp8/fp8_attn_input_a8.cu
+  ops/attn_input_proj/fp8/fp8_attn_input_plan.cpp
   ops/attn_input_proj/nvfp4/nvfp4_attn_input_decode.cu
   ops/attn_input_proj/nvfp4/nvfp4_attn_input_small_t.cu
   ops/attn_input_proj/nvfp4/nvfp4_attn_input_w4a4.cu

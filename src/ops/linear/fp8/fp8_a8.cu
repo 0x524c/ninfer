@@ -3,7 +3,7 @@
 #include "core/device.h"
 #include "ops/common/math.cuh"
 #include "ops/common/warp.cuh"
-#include "ops/linear/fp8/fp8_a8_mma.cuh"
+#include "ops/linear/fp8/fp8_a8_schedule.cuh"
 #include "ops/linear/fp8/fp8_config.h"
 #include "ops/linear/fp8/fp8_output.cuh"
 
@@ -15,17 +15,6 @@
 
 namespace ninfer::ops::detail {
 namespace {
-
-using M64N128 = Fp8MmaSchedule<64, 128, 128, 2, 4, 2, 2, Cache::cg, Cache::cg,
-                               Fp8MmaFragmentPipeline::PingPong, Fp8MmaRaster::TokenFast>;
-
-template <class Geometry>
-struct Fp8LinearA8ProductionSchedule;
-
-template <>
-struct Fp8LinearA8ProductionSchedule<Fp8AttnInputGeometry> {
-    using Type = M64N128;
-};
 
 template <class ActivationGeometry, int Threads = 256>
 __global__ __launch_bounds__(Threads,
