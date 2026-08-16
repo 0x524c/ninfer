@@ -684,23 +684,23 @@ For source prefix `model.visual.merger.`:
 | `norm/weight` | `norm.weight [1152]` | preserve BF16 |
 | `norm/bias` | `norm.bias [1152]` | preserve BF16 |
 
-### 12.3 Producer and verifier requirements
+### 12.3 Producer requirements
 
 Before opening the output, the converter must validate both fixed checkpoint configurations, every
 selected source name, shape, dtype, format assignment, source scale geometry, frontend resource,
 ranking input, and the complete ordered object plan.
 
-The offline verifier must establish:
+During materialization, the converter must:
 
-- exact preservation of every source-derived E4M3FN code and BF16 row-scale word after the defined
+- preserve every source-derived E4M3FN code and BF16 row-scale word exactly after the defined
   split, permutation, and fusion;
-- exact preservation of every NVFP4 packed code, natural scale word, `d_w`, and `d_x`, including
+- preserve every NVFP4 packed code, natural scale word, `d_w`, and `d_x` exactly, including
   all gate/up equality requirements;
-- exact direct-word preservation and the specified BF16-to-FP32 expansions;
-- embedding parity with the bit-level encoder oracle in Section 10.4;
-- draft-head, MTP, and Vision parity with `MAXABS_F16_RECIP_RNE_V1` at representative rows and
-  groups;
-- the complete inventory, formats, layouts, logical views, aliases, and six resource payloads.
+- preserve direct words exactly and perform the specified BF16-to-FP32 expansions;
+- encode the embedding with the bit-level profile in Section 10.4;
+- encode draft-head, MTP, and Vision weights with `MAXABS_F16_RECIP_RNE_V1`;
+- write the complete inventory, formats, layouts, logical views, aliases, and six resource
+  payloads.
 
 Validation must reject an incomplete or alternate mixed-precision allocation. It must not fill a
 missing source matrix from the official BF16 checkpoint, silently requantize a preserved FP8 or
