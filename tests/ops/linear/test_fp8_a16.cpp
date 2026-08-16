@@ -37,6 +37,35 @@ int run_fp8_a16() {
     };
     failures += run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
                           {34816, 5120, 821U, Comparison::Sampled, true, mlp_invocations});
+    constexpr std::array vocabulary_invocations{
+        Invocation{1, CallForm::A16Convenience, ops::LinearPolicy::A16Only},
+        Invocation{8, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{9, CallForm::Policy, ops::LinearPolicy::AllowA4},
+        Invocation{24, CallForm::Policy, ops::LinearPolicy::A16Only},
+        Invocation{25, CallForm::Policy, ops::LinearPolicy::AllowA8},
+        Invocation{48, CallForm::Policy, ops::LinearPolicy::AllowA4},
+        Invocation{49, CallForm::Policy, ops::LinearPolicy::A16Only},
+    };
+    failures += run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
+                          {248320, 5120, 823U, Comparison::Sampled, true, vocabulary_invocations});
+    constexpr std::array vocabulary_policies{
+        ops::LinearPolicy::A16Only,
+        ops::LinearPolicy::AllowA8,
+        ops::LinearPolicy::AllowA4,
+    };
+    for (const ops::LinearPolicy policy : vocabulary_policies) {
+        try {
+            const std::size_t capacity = ops::linear_workspace_capacity_bytes(
+                QType::FP8_E4M3FN_ROW_BF16S, 248320, 5120, policy, 1, 2048);
+            if (capacity != 0) {
+                std::cerr << "FP8 vocabulary A16 route reported nonzero workspace\n";
+                ++failures;
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "FP8 vocabulary policy was rejected: " << error.what() << '\n';
+            ++failures;
+        }
+    }
     constexpr std::array residual6144_invocations{
         Invocation{1, CallForm::A16Convenience, ops::LinearPolicy::A16Only},
         Invocation{2, CallForm::Policy, ops::LinearPolicy::A16Only},
@@ -45,7 +74,7 @@ int run_fp8_a16() {
         Invocation{24, CallForm::Policy, ops::LinearPolicy::AllowA8},
     };
     failures += run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
-                          {5120, 6144, 823U, Comparison::Sampled, true, residual6144_invocations});
+                          {5120, 6144, 827U, Comparison::Sampled, true, residual6144_invocations});
     constexpr std::array residual17408_invocations{
         Invocation{1, CallForm::A16Convenience, ops::LinearPolicy::A16Only},
         Invocation{2, CallForm::Policy, ops::LinearPolicy::A16Only},
@@ -55,9 +84,9 @@ int run_fp8_a16() {
     };
     failures +=
         run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
-                  {5120, 17408, 827U, Comparison::Sampled, true, residual17408_invocations});
+                  {5120, 17408, 829U, Comparison::Sampled, true, residual17408_invocations});
 
-    auto packed = make_fp8_weight(14336, 5120, 829U);
+    auto packed = make_fp8_weight(14336, 5120, 831U);
     try {
         (void)ops::detail::validate_fp8_weight(packed.weight, "FP8 validator test");
     } catch (const std::exception& error) {

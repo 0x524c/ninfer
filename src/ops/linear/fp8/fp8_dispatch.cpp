@@ -24,6 +24,12 @@ Fp8LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows, 
     }
     const Fp8Problem problem = resolve_fp8_problem(output_rows, input_rows);
     if (policy == LinearPolicy::A16Only) { return Fp8LinearRoute::A16; }
+    // A permissive policy does not require a lower-precision route. Vocabulary logits retain
+    // BF16 activation compute for every policy, matching the existing Q6/W8 output heads.
+    if (problem == Fp8Problem::Vocabulary &&
+        (policy == LinearPolicy::AllowA8 || policy == LinearPolicy::AllowA4)) {
+        return Fp8LinearRoute::A16;
+    }
     if (policy != LinearPolicy::AllowA8) {
         throw std::invalid_argument("fp8 linear: unsupported policy");
     }
@@ -35,6 +41,8 @@ Fp8LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows, 
         return tokens >= 11 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
     case Fp8Problem::MlpGateUp:
         return tokens == 1 || tokens >= 5 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
+    case Fp8Problem::Vocabulary:
+        return Fp8LinearRoute::A16;
     case Fp8Problem::Residual6144:
     case Fp8Problem::Residual17408:
         return tokens >= 25 ? Fp8LinearRoute::A8 : Fp8LinearRoute::A16;
@@ -44,7 +52,8 @@ Fp8LinearRoute resolve_route(std::int32_t output_rows, std::int32_t input_rows, 
 
 void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t stream) {
     const Fp8Problem problem = resolve_fp8_problem(weight.n, weight.k);
-    const std::int32_t chunk = fp8_linear_small_t_max(problem);
+    const std::int32_t chunk = problem == Fp8Problem::Vocabulary ? kFp8VocabularyLastA16MmaT
+                                                                 : fp8_linear_small_t_max(problem);
     for (std::int32_t token_begin = 0; token_begin < x.ne[1]; token_begin += chunk) {
         const std::int32_t active = std::min(chunk, x.ne[1] - token_begin);
         auto* input               = static_cast<std::uint8_t*>(x.data) +
@@ -53,7 +62,9 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, cudaStream_t
                        static_cast<std::int64_t>(token_begin) * weight.n * sizeof(std::uint16_t);
         Tensor input_chunk(input, DType::BF16, {weight.k, active});
         Tensor output_chunk(output, DType::BF16, {weight.n, active});
-        if (active == 1) {
+        if (problem == Fp8Problem::Vocabulary) {
+            launch_fp8_vocabulary_a16_mma(input_chunk, weight, output_chunk, stream);
+        } else if (active == 1) {
             launch_fp8_decode(input_chunk, weight, output_chunk, stream);
         } else {
             launch_fp8_small_t(input_chunk, weight, output_chunk, stream);
@@ -71,6 +82,8 @@ bool interval_uses_a8(Fp8Problem problem, LinearPolicy policy, std::int32_t min_
         return max_tokens >= 11;
     case Fp8Problem::MlpGateUp:
         return min_tokens == 1 || max_tokens >= 5;
+    case Fp8Problem::Vocabulary:
+        return false;
     case Fp8Problem::Residual6144:
     case Fp8Problem::Residual17408:
         return max_tokens >= 25;

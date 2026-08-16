@@ -41,6 +41,8 @@ void launch_fp8_decode(const Tensor& x, const Weight& weight, Tensor& out, cudaS
     case Fp8Problem::MlpGateUp:
         launch_exact<Fp8MlpGateUpGeometry>(x, weight, out, stream);
         return;
+    case Fp8Problem::Vocabulary:
+        break;
     case Fp8Problem::Residual6144:
         launch_exact<Fp8Residual6144Geometry>(x, weight, out, stream);
         return;
@@ -48,6 +50,7 @@ void launch_fp8_decode(const Tensor& x, const Weight& weight, Tensor& out, cudaS
         launch_exact<Fp8Residual17408Geometry>(x, weight, out, stream);
         return;
     }
+    throw std::logic_error("FP8 vocabulary decode uses its A16 MMA route");
 }
 
 } // namespace ninfer::ops::detail

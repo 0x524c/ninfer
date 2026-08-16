@@ -147,6 +147,8 @@ void launch_fp8_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Work
     case Fp8Problem::MlpGateUp:
         launch_problem<Fp8MlpGateUpGeometry>(weight, out, workspace, tokens, stream);
         return;
+    case Fp8Problem::Vocabulary:
+        break;
     case Fp8Problem::Residual6144:
         launch_problem<Fp8Residual6144Geometry>(weight, out, workspace, tokens, stream);
         return;
@@ -154,6 +156,7 @@ void launch_fp8_a8(const Tensor& x, const Weight& weight, Tensor& out, Fp8A8Work
         launch_problem<Fp8Residual17408Geometry>(weight, out, workspace, tokens, stream);
         return;
     }
+    throw std::logic_error("FP8 vocabulary has no A8 route");
 }
 
 } // namespace ninfer::ops::detail

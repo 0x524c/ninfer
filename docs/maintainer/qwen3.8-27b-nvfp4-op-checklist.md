@@ -46,7 +46,8 @@ L5/L6 在 `T<25` 使用 A16、`T>=25` 使用 A8；R1 在 `T<22` 使用 A16、`T>
 调用确定 route。A1 直接写入
 Q/K/gate/V，G1 直接写入 QKV/Z，M1 直接写入最终
 SwiGLU 结果，R1/R2 直接完成原地 residual 更新；G2/G3 也已完成独立的 snapshot/record route、
-workspace、完整公式验证和 public benchmark。当前只剩 L1/E1 两个 `[248320,5120]` registration。
+workspace、完整公式验证和 public benchmark。L1 output-head Linear 也已完成；当前只剩 E1
+`[248320,5120]` embedding registration。
 Artifact 中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format
 名称相同便假定已覆盖。
 
@@ -111,14 +112,17 @@ alignment；对于受信 artifact，不在加载或调用时扫描每个 code/sc
 
 ### 2.3 Public activation-compute policy
 
-除 `embedding` 外，每个新增 FP8 registration 都有 policy-bearing form。Artifact 所需的完整合同是
-`LinearPolicy::AllowA8`，并覆盖该 registration 的整个 extent domain。Public activation 和输出仍是
-BF16；private resolver 可以选择已验证的 A16 route，也可以先把 activation 私有量化为 FP8。该 policy
-不承诺所有 extent 都走 A8，也不规定 activation encoder、scale granularity、workspace 表示或 MMA
-instruction。
+除 `embedding` 外，每个新增 FP8 registration 都有 policy-bearing form。L2..L6 及其实际 consumer
+所需的完整合同是 `LinearPolicy::AllowA8`，并覆盖 registration 的整个 extent domain。Public
+activation 和输出仍是 BF16；private resolver 可以选择已验证的 A16 route，也可以先把 activation
+私有量化为 FP8。该 policy 不承诺所有 extent 都走 A8，也不规定 activation encoder、scale
+granularity、workspace 表示或 MMA instruction。
 
 实现可以额外接纳有价值的 `A16Only` form。它必须声明精确 extent domain 并有直接 oracle 覆盖，
-但不能代替完整正 extent 上的 `AllowA8` registration。`AllowA4` 不属于 row-scaled FP8 profile。
+但不能代替 L2..L6 完整正 extent 上的 `AllowA8` registration。L1 output head 同时接纳 `A16Only`、
+`AllowA8` 和 `AllowA4`，三种 permission 均解析为已验证的 A16 compute；permissive policy 不要求实际
+采用更低精度，因此拒绝 `AllowA4` 反而不符合该 policy 的语义。该例外不为其他 row-scaled FP8
+registration 自动增加 `AllowA4`。
 
 所有 policy-bearing capacity query 必须覆盖与 execution 相同的 format、geometry、policy 和 inclusive
 extent interval。合法的零 workspace route 返回零；需要 activation quantization 或 staging 的 route
@@ -434,7 +438,7 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 
 | ID | 类别 | 语义 Op | 精确 FP8 parent `[N,K]` | Public 结果/效果 | Artifact 覆盖 | 状态 |
 |---|---|---|---:|---|---|---|
-| L1 | generic | `linear` | `[248320,5120]` | `BF16 [248320,T]` | full head，1 个 parent | [ ] |
+| L1 | generic | `linear` | `[248320,5120]` | `BF16 [248320,T]` | full head，1 个 parent | [x]（完整正 T；A16Only/AllowA8/AllowA4 均为 A16、零 workspace） |
 | E1 | gather | `embedding` | `[248320,5120]` | gather `BF16 [5120,T]` | embedding，1 个 parent | [ ] |
 | L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [x]（T<=11/A16、T>=12/A8；完整正 T 与性能目标已完成） |
 | A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [x]（完整正 T；T<=10/A16、T>=11/A8） |
@@ -467,8 +471,9 @@ A/G/M/R 项作为一条连续工作流推进。
   16-byte-aligned 的 `out BF16 [N,T]`，覆盖每个正 `T`。
 - [ ] 要求 x、out、两个 weight plane 和 live workspace 满足完整 non-overlap 合同；weight 不可变，
   Op 不持有 persistent state。
-- [ ] 注册 `LinearPolicy::AllowA8`，并让 `linear_workspace_capacity_bytes` 对同一精确 problem、
-  policy 和所有合法正 inclusive `T` interval 返回 execution 的真实上界。
+- [ ] 注册所需 policy（L1 为 `A16Only/AllowA8/AllowA4`，L2..L6 至少为 `AllowA8`），并让
+  `linear_workspace_capacity_bytes` 对同一精确 problem、policy 和所有合法正 inclusive `T`
+  interval 返回 execution 的真实上界。
 - [ ] 从精确解码的 `w_hat` 与 represented BF16 input 计算每个完整 dot product，并直接与公共
   naive-FP64 Linear oracle 比较。Oracle 不插入 private activation quantization 或 production
   accumulation tree。
@@ -499,6 +504,13 @@ A/G/M/R 项作为一条连续工作流推进。
 
 L1 的 `linear` 不带 vocabulary-domain 语义。下游 sampling 和 `argmax` 继续接收现有 valid-row
 limit `248077`；它们不因 physical output 有 248320 行而新增 format admission。
+
+L1 完成证据（RTX 5090、CUDA 13.1、public Linear、cold cache）：独立 FP64 oracle 已覆盖
+`T=1/8/9/24/25/48/49`、三种合法 policy、输入与权重不变性，以及 `T=1..2048` 的零 workspace
+合同。完整 public `T=1..48` 曲线中，`T=1` 为 `791.808 us`、`1607.0 GB/s`，达到持续读取带宽的
+`95.97%`；`T=1..24` 保持在 `791.808..806.144 us`。最大相邻增幅为 `T=24 -> 25` 的 `5.61%`，
+`T=32 -> 33` 和 `T=40 -> 41` 分别为 `5.23%` 和 `4.73%`；`T=48` 为 `1424.640 us`、
+`85.67 TFLOP/s`。
 
 L2..L6 的 dense BF16 输出是 public Linear 自身的真实结果，也是开发与调优 contraction 最直接的
 切入面；它们不是 fused Op 的强制中间表示，也不是独立阶段的终点。每个 L 项一旦形成可复用模板，

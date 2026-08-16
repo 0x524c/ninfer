@@ -85,19 +85,73 @@ struct Fp8SmallTSchedule {
     static constexpr int kRowsPerCta        = WarpsPerCta * RowsPerWarp;
 };
 
+enum class Fp8A16MmaActivationStage : std::uint8_t {
+    ActiveOnly,
+    PaddedZero,
+};
+
+enum class Fp8A16MmaCache : std::uint8_t {
+    Default,
+    Streaming,
+};
+
+template <int KWarps, int TileTokens, int MinBlocksPerSm,
+          Fp8A16MmaCache ActivationCache           = Fp8A16MmaCache::Default,
+          Fp8A16MmaCache WeightCache               = Fp8A16MmaCache::Streaming,
+          Fp8A16MmaActivationStage ActivationStage = Fp8A16MmaActivationStage::ActiveOnly>
+struct Fp8A16MmaSchedule {
+    static_assert(KWarps == 4 || KWarps == 8 || KWarps == 16);
+    static_assert(TileTokens == 8 || TileTokens == 16 || TileTokens == 24 || TileTokens == 32 ||
+                  TileTokens == 40 || TileTokens == 48);
+    static_assert(MinBlocksPerSm > 0);
+
+    static constexpr int kKWarps            = KWarps;
+    static constexpr int kTileTokens        = TileTokens;
+    static constexpr int kMinBlocksPerSm    = MinBlocksPerSm;
+    static constexpr auto kActivationCache  = ActivationCache;
+    static constexpr auto kWeightCache      = WeightCache;
+    static constexpr auto kActivationStage  = ActivationStage;
+    static constexpr int kThreads           = KWarps * 32;
+    static constexpr int kTileKPerWarp      = 64;
+    static constexpr int kGroupK            = KWarps * kTileKPerWarp;
+    static constexpr int kRowsPerCta        = 16;
+    static constexpr int kRowsPerLoaderWarp = kRowsPerCta / KWarps;
+};
+
 using Fp8AttnInputGeometry       = Fp8Geometry<14336, 5120>;
 using Fp8GdnInputGeometry        = Fp8Geometry<16384, 5120>;
 using Fp8MlpGateUpGeometry       = Fp8Geometry<34816, 5120>;
+using Fp8VocabularyGeometry      = Fp8Geometry<248320, 5120>;
 using Fp8Residual6144Geometry    = Fp8Geometry<5120, 6144>;
 using Fp8Residual17408Geometry   = Fp8Geometry<5120, 17408>;
 using Fp8Activation5120Geometry  = Fp8ActivationGeometry<5120>;
 using Fp8Activation6144Geometry  = Fp8ActivationGeometry<6144>;
 using Fp8Activation17408Geometry = Fp8ActivationGeometry<17408>;
 
+inline constexpr std::int32_t kFp8VocabularyFirstA16MmaT = 1;
+inline constexpr std::int32_t kFp8VocabularyLastA16MmaT  = 48;
+
+template <int ActiveTokens>
+struct Fp8VocabularyA16MmaProductionSchedule {
+    static_assert(ActiveTokens >= kFp8VocabularyFirstA16MmaT);
+    static_assert(ActiveTokens <= kFp8VocabularyLastA16MmaT);
+
+    static constexpr int kTileTokens     = ActiveTokens <= 8    ? 8
+                                           : ActiveTokens <= 16 ? 16
+                                           : ActiveTokens <= 24 ? 24
+                                           : ActiveTokens <= 32 ? 32
+                                           : ActiveTokens <= 40 ? 40
+                                                                : 48;
+    static constexpr int kKWarps         = ActiveTokens <= 8 ? 16 : (ActiveTokens <= 24 ? 8 : 4);
+    static constexpr int kMinBlocksPerSm = kKWarps == 16 ? 1 : 2;
+    using Type                           = Fp8A16MmaSchedule<kKWarps, kTileTokens, kMinBlocksPerSm>;
+};
+
 enum class Fp8Problem : std::uint8_t {
     AttnInput,
     GdnInput,
     MlpGateUp,
+    Vocabulary,
     Residual6144,
     Residual17408,
 };
@@ -109,6 +163,8 @@ inline constexpr bool is_fp8_linear_problem(std::int32_t output_rows, std::int32
             input_rows == Fp8GdnInputGeometry::kInputRows) ||
            (output_rows == Fp8MlpGateUpGeometry::kOutputRows &&
             input_rows == Fp8MlpGateUpGeometry::kInputRows) ||
+           (output_rows == Fp8VocabularyGeometry::kOutputRows &&
+            input_rows == Fp8VocabularyGeometry::kInputRows) ||
            (output_rows == Fp8Residual6144Geometry::kOutputRows &&
             input_rows == Fp8Residual6144Geometry::kInputRows) ||
            (output_rows == Fp8Residual17408Geometry::kOutputRows &&
@@ -127,6 +183,10 @@ inline Fp8Problem resolve_fp8_problem(std::int32_t output_rows, std::int32_t inp
     if (output_rows == Fp8MlpGateUpGeometry::kOutputRows &&
         input_rows == Fp8MlpGateUpGeometry::kInputRows) {
         return Fp8Problem::MlpGateUp;
+    }
+    if (output_rows == Fp8VocabularyGeometry::kOutputRows &&
+        input_rows == Fp8VocabularyGeometry::kInputRows) {
+        return Fp8Problem::Vocabulary;
     }
     if (output_rows == Fp8Residual6144Geometry::kOutputRows &&
         input_rows == Fp8Residual6144Geometry::kInputRows) {
@@ -198,12 +258,14 @@ inline std::int32_t fp8_linear_small_t_max(Fp8Problem problem) {
         return kFp8LinearSmallTMax<Fp8GdnInputGeometry>;
     case Fp8Problem::MlpGateUp:
         return kFp8LinearSmallTMax<Fp8MlpGateUpGeometry>;
+    case Fp8Problem::Vocabulary:
+        break;
     case Fp8Problem::Residual6144:
         return kFp8LinearSmallTMax<Fp8Residual6144Geometry>;
     case Fp8Problem::Residual17408:
         return kFp8LinearSmallTMax<Fp8Residual17408Geometry>;
     }
-    throw std::logic_error("unreachable FP8 linear problem");
+    throw std::logic_error("FP8 vocabulary uses its A16 MMA route");
 }
 
 // RTX 5090 cold-cache winners for contiguous Linear output. Each geometry owns its measured

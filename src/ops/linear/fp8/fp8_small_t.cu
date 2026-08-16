@@ -64,6 +64,8 @@ void launch_fp8_small_t(const Tensor& x, const Weight& weight, Tensor& out, cuda
     case Fp8Problem::MlpGateUp:
         launch_registered<Fp8MlpGateUpGeometry>(x, weight, out, stream);
         return;
+    case Fp8Problem::Vocabulary:
+        break;
     case Fp8Problem::Residual6144:
         launch_registered<Fp8Residual6144Geometry>(x, weight, out, stream);
         return;
@@ -71,7 +73,7 @@ void launch_fp8_small_t(const Tensor& x, const Weight& weight, Tensor& out, cuda
         launch_registered<Fp8Residual17408Geometry>(x, weight, out, stream);
         return;
     }
-    throw std::logic_error("unreachable FP8 linear problem");
+    throw std::logic_error("FP8 vocabulary small-T uses its A16 MMA route");
 }
 
 } // namespace ninfer::ops::detail
