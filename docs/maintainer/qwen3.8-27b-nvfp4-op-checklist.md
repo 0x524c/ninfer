@@ -46,8 +46,8 @@ L5/L6 在 `T<25` 使用 A16、`T>=25` 使用 A8；R1 在 `T<22` 使用 A16、`T>
 调用确定 route。A1 直接写入
 Q/K/gate/V，G1 直接写入 QKV/Z，M1 直接写入最终
 SwiGLU 结果，R1/R2 直接完成原地 residual 更新；G2/G3 也已完成独立的 snapshot/record route、
-workspace、完整公式验证和 public benchmark。L1 output-head Linear 也已完成；当前只剩 E1
-`[248320,5120]` embedding registration。
+workspace、完整公式验证和 public benchmark。L1 output-head Linear 与 E1 embedding 也已完成，
+14 个精确 row-scaled FP8 registration 已全部交付。
 Artifact 中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format
 名称相同便假定已覆盖。
 
@@ -439,7 +439,7 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 | ID | 类别 | 语义 Op | 精确 FP8 parent `[N,K]` | Public 结果/效果 | Artifact 覆盖 | 状态 |
 |---|---|---|---:|---|---|---|
 | L1 | generic | `linear` | `[248320,5120]` | `BF16 [248320,T]` | full head，1 个 parent | [x]（完整正 T；A16Only/AllowA8/AllowA4 均为 A16、零 workspace） |
-| E1 | gather | `embedding` | `[248320,5120]` | gather `BF16 [5120,T]` | embedding，1 个 parent | [ ] |
+| E1 | gather | `embedding` | `[248320,5120]` | gather `BF16 [5120,T]` | embedding，1 个 parent | [x]（完整正 T；零 workspace） |
 | L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [x]（T<=11/A16、T>=12/A8；完整正 T 与性能目标已完成） |
 | A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [x]（完整正 T；T<=10/A16、T>=11/A8） |
 | L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [x]（完整正 T；T<=10/A16、T>=11/A8） |
@@ -522,21 +522,28 @@ A1/G1/G2/G3/M1/R1/R2。实际 Op 必须直接满足自己的最终输出合同�
 
 ### E1 — row-scaled FP8 `embedding [248320,5120]`
 
-- [ ] 接纳一个完整的 row-scaled FP8 table `[vocab,D] = [248320,5120]`。
-- [ ] 接受连续 `ids I32 [T]`，写入连续 `out BF16 [5120,T]`，覆盖每个正 `T`；每个 id 位于
+- [x] 接纳一个完整的 row-scaled FP8 table `[vocab,D] = [248320,5120]`。
+- [x] 接受连续 `ids I32 [T]`，写入连续 `out BF16 [5120,T]`，覆盖每个正 `T`；每个 id 位于
   `[0,248320)`。
-- [ ] 计算 `ideal[d,t] = w_hat[ids[t],d]`。重复 id 是相互独立的 gather；即使产品 sampling
+- [x] 计算 `ideal[d,t] = w_hat[ids[t],d]`。重复 id 是相互独立的 gather；即使产品 sampling
   只产生 token id `0..248076`，padded artifact row 仍是合法的 Op 输入。
-- [ ] 要求 ids、out 与两个 weight plane 互不重叠。Table 不可变，Op 没有 workspace 或
+- [x] 要求 ids、out 与两个 weight plane 互不重叠。Table 不可变，Op 没有 workspace 或
   persistent state。
-- [ ] 扩展独立 embedding fixture：独立精确解码 E4M3FN/BF16 row，覆盖 signed zero、zero-scale
+- [x] 扩展独立 embedding fixture：独立精确解码 E4M3FN/BF16 row，覆盖 signed zero、zero-scale
   row、重复/边界 id、全部输出元素、未修改输入，以及 malformed row-scale metadata。
-- [ ] 保持 dense BF16、Q6-D5120、W8-D5120 和 W8-D2048 embedding admission 与回归。
-- [ ] 在 public embedding benchmark 中加入该 exact profile，覆盖每个 `T=1..48`，并以 `T=1024`
+- [x] 保持 dense BF16、Q6-D5120、W8-D5120 和 W8-D2048 embedding admission 与回归。
+- [x] 在 public embedding benchmark 中加入该 exact profile，覆盖每个 `T=1..48`，并以 `T=1024`
   作为 prefill gather 的主要吞吐点。
 
 E1 没有 activation-compute policy：它只 gather 并重建选中 row，不执行 activation matrix
 contraction。它是独立工作流，不参与 Linear 到实际 projection Op 的连续改造过程。
+
+E1 完成证据（RTX 5090、CUDA 13.1、public `embedding`、cold cache）：独立 FP64 oracle 覆盖
+zero/subnormal/normal/max E4M3FN code、zero 与极小 BF16 scale、重复及边界 id、全部输出元素、
+输入和 table 不变性、malformed metadata，以及所有 production schedule。完整 `T=1..48` public
+曲线的 median 为 `5.344..5.408 us`，最大相邻增幅为 `0.60%`；`T=1024` 为 `13.600 us`、
+`1157.0 GB/s`。同一次测量中 `T=48` 和 `T=1024` 的 p95 分别为 `11.264 us` 和 `29.440 us`，
+这些尾部波动未通过重复测量或选择性结果隐藏。
 
 ## 7. 全注意力输入投影
 

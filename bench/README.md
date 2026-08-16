@@ -151,11 +151,11 @@ utilization still require NCU.
 
 ## Embedding Op benchmark
 
-`ninfer_embedding_bench` measures the three registered quantized public `embedding()` profiles:
-Q6 `[248320,5120]`, W8 `[248320,5120]`, and W8 `[248320,2048]`. With no token override, each
-profile enumerates its exact aggregate Decode domain for `B=1..8`: the two D=5120 profiles cover
-ordinary Decode and MTP through `T=48`, while W8/D=2048 additionally covers DFlash through
-`T=128`.
+`ninfer_embedding_bench` measures the four registered quantized public `embedding()` profiles:
+Q6 `[248320,5120]`, W8 `[248320,5120]`, W8 `[248320,2048]`, and row-scaled FP8
+`[248320,5120]`. With no token override, each profile enumerates its exact aggregate Decode domain
+for `B=1..8`: the three D=5120 profiles cover ordinary Decode and MTP through `T=48`, while
+W8/D=2048 additionally covers DFlash through `T=128`.
 
 Each interval contains one public Op call and receives one 256 MiB L2 eviction before timing; the
 eviction itself is excluded. Effective bandwidth counts the selected encoded rows, their scales,
@@ -168,6 +168,7 @@ cmake --build build --parallel --target ninfer_embedding_bench
 ./build/bench/ninfer_embedding_bench --profile q6-d5120 --warmup 10 --repeat 61
 ./build/bench/ninfer_embedding_bench --profile w8-d5120 --warmup 10 --repeat 61
 ./build/bench/ninfer_embedding_bench --profile w8-d2048 --warmup 10 --repeat 61
+./build/bench/ninfer_embedding_bench --profile fp8-d5120 --warmup 10 --repeat 61
 ./build/bench/ninfer_embedding_bench \
   --profile w8-d2048 --tokens 1,6,7,16,128 --warmup 10 --repeat 61 --csv
 ```
