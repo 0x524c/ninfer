@@ -72,9 +72,10 @@ load, graph construction, and warmup do not enter topology counts.
 ## Linear Op benchmark
 
 `ninfer_linear_bench` measures only the public pure `linear()` contract. It supports Q4, Q5, Q6,
-W8, registered BF16 weights, and the registered NVFP4 problems. Existing formats use
-`--policy a16`; NVFP4 additionally supports `--policy a4`, which lets the production resolver
-select the qualified route for each exact geometry and T. LinearAdd, LinearSwiGLU,
+W8, registered BF16 weights, the registered NVFP4 problems, and the FP8 `[14336,5120], T=1`
+registration. Existing formats use `--policy a16`; NVFP4 additionally supports `--policy a4`, and
+FP8 supports `--policy a8`. Each permission lets the production resolver select the qualified
+route for the exact geometry and T. LinearAdd, LinearSwiGLU,
 LinearPair, Attention/GDN projections, and sparse MoE remain separate semantic Ops and are not
 benchmark modes here.
 
@@ -94,6 +95,8 @@ cmake --build build --parallel --target ninfer_linear_bench
   --qtype q4 --policy a16 --n 4096 --k 5120 --t 8
 ./build/bench/ninfer_linear_bench \
   --qtype nvfp4 --policy a4 --n 14336 --k 5120 --t 1024
+./build/bench/ninfer_linear_bench \
+  --qtype fp8 --policy a8 --n 14336 --k 5120 --t 1
 ```
 
 A continuous small-T sweep reuses one packed weight and one maximum-T activation/output
@@ -491,9 +494,10 @@ cmake --build build --parallel --target ninfer_w8_linear_add_bench
 
 `ninfer_attn_input_proj_bench` measures every registered public `attn_input_proj()` weight/shape
 contract: the 27B two-parent Q4/Q5 projection; the 35B W8 Q/K/gate/V and companion Q/K/V
-projections; and the 27B BF16 and NVFP4 single-parent Q/K/gate/V projections. Fixture packing and
-public workspace capacity queries happen before timing. Every sample and profiler range contains
-exactly one public Op call, so production owns format-specific dispatch and launch decomposition.
+projections; and the 27B BF16, NVFP4, and T=1 FP8 single-parent Q/K/gate/V projections. Fixture
+packing and public workspace capacity queries happen before timing. Every sample and profiler
+range contains exactly one public Op call, so production owns format-specific dispatch and launch
+decomposition.
 
 ```bash
 cmake --build build --parallel --target ninfer_attn_input_proj_bench
@@ -504,6 +508,9 @@ cmake --build build --parallel --target ninfer_attn_input_proj_bench
 ./build/bench/ninfer_attn_input_proj_bench \
   --format nvfp4 --nvfp4-policy a4 --tokens 1024 \
   --cache cold --warmup 10 --profile
+./build/bench/ninfer_attn_input_proj_bench \
+  --format fp8 --fp8-policy a8 --tokens 1 \
+  --cache cold --warmup 10 --repeat 50
 ```
 
 The stateful GDN projection/convolution/snapshot contract remains in its own public Op benchmark;

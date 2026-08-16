@@ -3,6 +3,7 @@
 // Examples:
 //   ./build/bench/ninfer_linear_bench --qtype q4 --n 4096 --k 5120 --t 8
 //   ./build/bench/ninfer_linear_bench --qtype q4 --n 4096 --k 5120 --sweep 1:32:1
+//   ./build/bench/ninfer_linear_bench --qtype fp8 --policy a8 --n 14336 --k 5120 --t 1
 //   ./build/bench/ninfer_linear_bench --suite qwen3_6_27b
 //   ncu --profile-from-start off ./build/bench/ninfer_linear_bench \
 //       --qtype q4 --n 4096 --k 5120 --t 8 --profile
@@ -226,6 +227,8 @@ const char* qtype_name(QType qtype) {
         return "BF16";
     case QType::NVFP4:
         return "NVFP4";
+    case QType::FP8_E4M3FN_ROW_BF16S:
+        return "FP8";
     default:
         break;
     }
@@ -234,6 +237,7 @@ const char* qtype_name(QType qtype) {
 
 const char* policy_name(LinearPolicy policy) {
     if (policy == LinearPolicy::A16Only) { return "A16"; }
+    if (policy == LinearPolicy::AllowA8) { return "A8"; }
     if (policy == LinearPolicy::AllowA4) { return "A4"; }
     throw std::invalid_argument("unsupported Linear benchmark policy");
 }
@@ -246,14 +250,16 @@ QType parse_qtype(std::string_view text) {
     if (value == "w8" || value == "w8g32" || value == "w8g32_f16s") { return QType::W8G32_F16S; }
     if (value == "bf16" || value == "bf16_ctrl") { return QType::BF16_CTRL; }
     if (value == "nvfp4") { return QType::NVFP4; }
+    if (value == "fp8" || value == "fp8_e4m3fn_row_bf16s") { return QType::FP8_E4M3FN_ROW_BF16S; }
     throw std::invalid_argument("unknown qtype: " + std::string(text));
 }
 
 LinearPolicy parse_policy(std::string_view text) {
     const std::string value = lower(text);
     if (value == "a16" || value == "a16only") { return LinearPolicy::A16Only; }
+    if (value == "a8" || value == "allowa8") { return LinearPolicy::AllowA8; }
     if (value == "a4" || value == "allowa4") { return LinearPolicy::AllowA4; }
-    throw std::invalid_argument("Linear benchmark policy must be a16 or a4");
+    throw std::invalid_argument("Linear benchmark policy must be a16, a8, or a4");
 }
 
 std::uint64_t parse_u64(std::string_view text, const char* label) {
@@ -309,21 +315,21 @@ Sweep parse_sweep(std::string_view text) {
 }
 
 void usage(const char* argv0) {
-    std::fprintf(
-        stderr,
-        "Usage:\n"
-        "  %s --qtype Q4|Q5|Q6|W8|BF16|NVFP4 --n N --k K --t T [options]\n"
-        "  %s --qtype Q4|Q5|Q6|W8|BF16|NVFP4 --n N --k K --sweep START:END[:STEP] [options]\n"
-        "  %s --suite qwen3_6_27b|qwen3_6_35b_a3b|all [options]\n\n"
-        "Options:\n"
-        "  --policy a16|a4    Activation-compute policy (default a16).\n"
-        "  --profile          Capture exactly one post-warmup public Linear call.\n"
-        "  --warmup N         Warmup calls per point (default %d).\n"
-        "  --repeat N         Measured cold-cache samples per point (default %d).\n"
-        "  --flush-mib N      L2 eviction buffer size (default 256 MiB).\n"
-        "  --csv-out PATH     Write all ordinary measurement rows as CSV.\n"
-        "  -h, --help         Show this text.\n",
-        argv0, argv0, argv0, kDefaultWarmup, kDefaultRepeat);
+    std::fprintf(stderr,
+                 "Usage:\n"
+                 "  %s --qtype Q4|Q5|Q6|W8|BF16|NVFP4|FP8 --n N --k K --t T [options]\n"
+                 "  %s --qtype Q4|Q5|Q6|W8|BF16|NVFP4|FP8 --n N --k K --sweep START:END[:STEP] "
+                 "[options]\n"
+                 "  %s --suite qwen3_6_27b|qwen3_6_35b_a3b|all [options]\n\n"
+                 "Options:\n"
+                 "  --policy a16|a8|a4 Activation-compute policy (default a16).\n"
+                 "  --profile          Capture exactly one post-warmup public Linear call.\n"
+                 "  --warmup N         Warmup calls per point (default %d).\n"
+                 "  --repeat N         Measured cold-cache samples per point (default %d).\n"
+                 "  --flush-mib N      L2 eviction buffer size (default 256 MiB).\n"
+                 "  --csv-out PATH     Write all ordinary measurement rows as CSV.\n"
+                 "  -h, --help         Show this text.\n",
+                 argv0, argv0, argv0, kDefaultWarmup, kDefaultRepeat);
 }
 
 Options parse_args(int argc, char** argv) {
@@ -491,6 +497,11 @@ LinearBenchWeight make_weight(QType qtype, std::int32_t n, std::int32_t k) {
     }
     if (qtype == QType::NVFP4) {
         bench::PackedQuantizedWeight packed = bench::make_nvfp4_weight(n, k);
+        const std::uint64_t model_bytes     = packed.model_weight_bytes();
+        return {std::move(packed.storage), packed.weight, model_bytes};
+    }
+    if (qtype == QType::FP8_E4M3FN_ROW_BF16S) {
+        bench::PackedQuantizedWeight packed = bench::make_fp8_weight(n, k);
         const std::uint64_t model_bytes     = packed.model_weight_bytes();
         return {std::move(packed.storage), packed.weight, model_bytes};
     }

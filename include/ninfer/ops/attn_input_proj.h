@@ -49,10 +49,14 @@ void attn_input_proj(const Tensor& x, const Weight& query_key_weight,
  *   BF16 `[5120,T]`, q/gate are BF16 `[6144,T]`, and k/v are BF16 `[1024,T]`.
  * - NVFP4 BlockScaleK16M128x4 `[14336,5120]`, with the same logical row and tensor shapes as
  *   BF16_CTRL.
+ * - FP8_E4M3FN_ROW_BF16S RowScale `[14336,5120]`, with the same logical row and tensor shapes as
+ *   BF16_CTRL. Its first registered route is T=1.
  *
  * `T` is the positive token extent of the Op contract. BF16_CTRL and W8G32_F16S admit only
  * LinearPolicy::A16Only. NVFP4 admits A16Only and AllowA4; AllowA4 permits the private resolver to
  * select either a qualified A16 route or activation quantization to NVFP4 at every positive T.
+ * FP8 admits A16Only and AllowA8 at T=1; both currently resolve to the qualified A16 CUDA-core
+ * route without activation quantization.
  *
  * The oracle evaluates every projection independently with naive FP64 accumulation from the
  * logical values represented by the persistent weight and BF16 activation. The final four BF16

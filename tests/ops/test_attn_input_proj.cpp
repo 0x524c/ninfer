@@ -306,6 +306,73 @@ int run_nvfp4_target() {
     return failures;
 }
 
+int run_fp8_target_case(DevicePackedWeight& parent, ops::LinearPolicy policy) {
+    constexpr std::int32_t kHidden                   = 5120;
+    constexpr std::int32_t kQRows                    = 6144;
+    constexpr std::int32_t kKvRows                   = 1024;
+    constexpr std::int32_t kRows                     = 14336;
+    constexpr std::int32_t kTokens                   = 1;
+    const std::vector<float> activation              = make_bf16_activation(kHidden, kTokens, 353U);
+    const std::vector<std::uint16_t> activation_bits = bf16_bits(activation);
+    DeviceBuffer device_activation                   = to_device(activation_bits);
+
+    GuardedBf16Tensor query(kQRows, kTokens);
+    GuardedBf16Tensor gate(kQRows, kTokens);
+    GuardedBf16Tensor key(kKvRows, kTokens);
+    GuardedBf16Tensor value(kKvRows, kTokens);
+    Tensor x(device_activation.p, DType::BF16, {kHidden, kTokens});
+    Tensor q = query.tensor();
+    Tensor g = gate.tensor();
+    Tensor k = key.tensor();
+    Tensor v = value.tensor();
+    if (policy == ops::LinearPolicy::A16Only) {
+        ops::attn_input_proj(x, parent.view(), q, g, k, v, nullptr);
+    } else {
+        const std::size_t capacity = ops::attn_input_proj_workspace_capacity_bytes(
+            QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, policy, kTokens, kTokens);
+        DeviceArena workspace(std::max<std::size_t>(capacity, 256));
+        ops::attn_input_proj(x, parent.view(), q, g, k, v, policy, workspace, nullptr);
+    }
+    cuda_synchronize();
+
+    constexpr std::int32_t kKeyBegin   = kQRows;
+    constexpr std::int32_t kGateBegin  = kKeyBegin + kKvRows;
+    constexpr std::int32_t kValueBegin = kGateBegin + kQRows;
+    const std::string suffix =
+        std::string(" FP8 ") + (policy == ops::LinearPolicy::AllowA8 ? "A8" : "A16") + " T=1";
+    int failures = 0;
+    failures += verify_output("attn q" + suffix, query, parent.host, 0, kQRows, activation, kHidden,
+                              kTokens);
+    failures += verify_output("attn k" + suffix, key, parent.host, kKeyBegin, kKvRows, activation,
+                              kHidden, kTokens);
+    failures += verify_output("attn gate" + suffix, gate, parent.host, kGateBegin, kQRows,
+                              activation, kHidden, kTokens);
+    failures += verify_output("attn value" + suffix, value, parent.host, kValueBegin, kKvRows,
+                              activation, kHidden, kTokens);
+    failures += verify_preserved("attn x" + suffix, device_activation, activation_bits);
+    failures += parent.verify_preserved("attn parent" + suffix);
+    return failures;
+}
+
+int run_fp8_target() {
+    constexpr std::int32_t kHidden = 5120;
+    constexpr std::int32_t kRows   = 14336;
+    DevicePackedWeight parent(
+        quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16S, kRows, kHidden, 349U));
+
+    int failures = 0;
+    for (const ops::LinearPolicy policy :
+         {ops::LinearPolicy::A16Only, ops::LinearPolicy::AllowA8}) {
+        if (ops::attn_input_proj_workspace_capacity_bytes(QType::FP8_E4M3FN_ROW_BF16S, kRows,
+                                                          kHidden, policy, 1, 1) != 0) {
+            std::cerr << "FP8 attention input T=1 workspace is not zero-capacity\n";
+            ++failures;
+        }
+        failures += run_fp8_target_case(parent, policy);
+    }
+    return failures;
+}
+
 int run_w8_target_case(DevicePackedWeight& parent, std::int32_t tokens) {
     constexpr std::int32_t kHidden      = 2048;
     constexpr std::int32_t kQRows       = 4096;
@@ -407,6 +474,7 @@ int main() {
     failures += run_q4_q5();
     failures += run_bf16_target();
     failures += run_nvfp4_target();
+    failures += run_fp8_target();
     failures += run_w8_target();
     failures += run_w8_companion();
     std::cout << (failures == 0 ? "OK" : "FAIL") << " attn_input_proj\n";

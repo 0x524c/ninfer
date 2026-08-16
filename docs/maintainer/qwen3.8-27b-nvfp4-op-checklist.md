@@ -33,10 +33,12 @@ MTP-private 和 Vision 权重的 format 与 geometry 没有变化，因此不需
 仍然 alias Text token embedding 和 full output head，所以这两个变化后的物理 parent 分别由同一
 `embedding` 和 `linear` registration 覆盖，不新增 MTP 专用 Op。
 
-当前 Op 层尚未接纳 `FP8_E4M3FN_ROW_BF16S` 或 `QuantLayout::RowScale`。本清单因此从
-14 个未完成的 registration 开始：6 个 generic FP8 Linear、1 个 embedding，以及 7 个复用
-Linear contraction 实现的 fused/专用 projection registration。Artifact 中另外 112 个 NVFP4
-parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称相同便假定已覆盖。
+本清单从 14 个未完成的完整 registration 开始：6 个 generic FP8 Linear、1 个 embedding，以及
+7 个复用 Linear contraction 实现的 fused/专用 projection registration。当前已经完成 L2→A1 的
+`T=1` 里程碑，Op 层因而已接纳这一精确 shape 的 `FP8_E4M3FN_ROW_BF16S` / `RowScale`；但其
+`T=2..48`、prefill 和完整正 extent 尚未完成，L2/A1 仍不能作为完整 registration 勾选。Artifact
+中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称相同
+便假定已覆盖。
 
 ## 2. 固定执行事实
 
@@ -167,13 +169,13 @@ L1..L6 以及由 L2..L6 连续改造得到的 rank-two projection Op 使用以�
 代表性 geometry 的打通过程，也规定后续 geometry 如何复用模板；E1、G2 和 G3 的不同执行域在本节
 末尾单独说明。
 
-- [ ] 开始第一个 FP8 contraction kernel 前，从 L2..L6 选择并记录一个代表性 geometry。选择必须
+- [x] 开始第一个 FP8 contraction kernel 前，从 L2..L6 选择并记录一个代表性 geometry。选择必须
   同时给出其紧邻的实际 consumer、预期复用的 contraction mainloop 和需要参数化的 output
   boundary，不能选择一个没有实际 Op 落点的合成 problem。
-- [ ] 该 geometry 先打通完整 public Linear 链路：row-FP8 Weight admission、`AllowA8`、workspace
+- [x] 该 geometry 先打通完整 public Linear 链路：row-FP8 Weight admission、`AllowA8`、workspace
   capacity、独立 fixture/oracle、conformance test 和 public Linear benchmark。Kernel 候选只能在
   这些入口能够验证真实 registration 后开始计时。
-- [ ] 首先实现和调优 `T=1` kernel。每个候选以编译期 schedule 参数形成明确实例；临时 benchmark
+- [x] 首先实现和调优 `T=1` kernel。每个候选以编译期 schedule 参数形成明确实例；临时 benchmark
   可以直接调用内部 launcher 强制候选，但必须使用相同输入、cache 状态、设备和 timing 方法，并在
   候选进入 production selector 后通过 public Linear 重新验证。
 - [ ] 随后实现一个或多个 small-T kernel family，对每个整数 `T=2..48` sweep 所有合法重叠候选。
@@ -201,6 +203,32 @@ L1 output head 同样覆盖 `T=1..48` hot interval，但不是 Text prefill 的 
 锚点。E1 对 `T=1..48` 和 `T=1024` 测量完整 gather，但不套用 contraction roofline。G2/G3 保留
 显式 `[rows,W,B]` 语义：hot-path sweep 覆盖当前产品可达的 `B=1..8`、`W<=6` 组合及其 public
 boundary，不能为了复用 rank-two 曲线而把状态 Op 的 public domain 展平为任意 `T`。
+
+### 2.6 当前 L2→A1 `T=1` 里程碑
+
+第一个代表性 geometry 已固定为 `[N,K]=[14336,5120]`，相邻实际 consumer 是 A1
+`attn_input_proj`。当前完成事实如下：
+
+- generic `linear` 与 fused `attn_input_proj` 都只注册该 geometry 的 `T=1`；`A16Only` 和
+  `AllowA8` 均合法、workspace capacity 均为零，`AllowA8` 当前解析为 A16；
+- production mainloop 由 Linear 所有，并以 output policy 分别写 dense Linear 输出和 A1 的
+  Q/K/gate/V 四个最终 allocation；A1 没有物化 packed parent 输出，也没有复制 FP8 decode；
+- T=1 schedule 为 8 warp/CTA、2 rows/warp、8 values/lane、4 条 FP32 accumulator chain、default
+  code cache、phase unroll 2、launch bound 2 blocks/SM；权重 E4M3FN 精确扩展，represented BF16
+  activation 使用 CUDA-core FP32 FMA，BF16 row scale 在完整 dot product 后应用；
+- 独立 fixture 精确解码 E4M3FN code 与 BF16 row scale；public Linear 的 convenience/`AllowA8`
+  form 和 public A1 的四个语义 row range 均已直接通过同一 naive-FP64 oracle；
+- RTX 5090、CUDA 13.1、cold-cache、80 次 public-call 测量中，Linear A16 median/min/p95 为
+  `50.464/49.632/51.200 us`，one-read effective bandwidth 为 `1455.8 GB/s`，即 sustained-read
+  probe 的 `86.94%`；A1 的 A16/AllowA8 median 分别是 `50.432/50.464 us`，split-output
+  epilogue 与 dense output 的差异落在测量波动内；
+- 原生 FP8 MMA 候选的最佳 public median 为 `69.632 us`，未达到 direct route；BF16 packed
+  accumulation 不满足 A16 数值 criterion，cp.async、K-split 和其他落选 schedule 已删除。
+
+这一里程碑尚未达到预定的 `<=48.75 us` / sustained-read `>=90%` T=1 目标，因此当前 schedule
+是后续 small-T 开发可直接复用的最佳已验证模板，不是 L2/A1 完整性能退出。下一步从同一模板实现
+并 sweep `T=2..48`，随后建立 `T=1024` A8 Tensor Core route；在这些工作完成前，总表状态保持未
+完成。
 
 ## 3. Artifact 到 consumer 的完整账本
 
@@ -248,8 +276,8 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 |---|---|---|---:|---|---|---|
 | L1 | generic | `linear` | `[248320,5120]` | `BF16 [248320,T]` | full head，1 个 parent | [ ] |
 | E1 | gather | `embedding` | `[248320,5120]` | gather `BF16 [5120,T]` | embedding，1 个 parent | [ ] |
-| L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [ ] |
-| A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [ ] |
+| L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [ ]（T=1 已接入） |
+| A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [ ]（T=1 已接入） |
 | L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [ ] |
 | G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [ ] |
 | G2 | fused projection/state | `gdn_input_proj_conv_snapshot` | `[16384,5120]` | Q/K/V/Z 加 convolution-state snapshot | 同 48 个 parent | [ ] |

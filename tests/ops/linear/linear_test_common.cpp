@@ -236,6 +236,10 @@ quantized_weight::PackedWeight make_nvfp4_weight(std::int32_t n, std::int32_t k,
     return quantized_weight::make_patterned_weight(QType::NVFP4, n, k, seed, options);
 }
 
+quantized_weight::PackedWeight make_fp8_weight(std::int32_t n, std::int32_t k, std::uint32_t seed) {
+    return quantized_weight::make_patterned_weight(QType::FP8_E4M3FN_ROW_BF16S, n, k, seed);
+}
+
 void cpu_linear_gemm_fp64(const float* weight, const float* activation, double* output,
                           std::int32_t n, std::int32_t k, std::int32_t t) {
     if (weight == nullptr || activation == nullptr || output == nullptr || n <= 0 || k <= 0 ||
