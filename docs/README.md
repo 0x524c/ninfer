@@ -55,8 +55,11 @@ Artifact and model references:
 - [Qwen3.6-35B-A3B model semantics](maintainer/qwen3.6-35b-a3b-model.md)
 - [Qwen3.6-35B-A3B artifact contracts](maintainer/qwen3.6-35b-a3b-artifact.md)
 
-Pending migration plan:
+Pending implementation work:
 
 - [Softmax Attention organization and migration](maintainer/softmax-attention.md) describes the
   single target state for an unfinished source and public-contract cutover; it is not the current
   implementation map.
+- [Qwen3.8-27B NVFP4 Op 支持清单](maintainer/qwen3.8-27b-nvfp4-op-checklist.md) defines the
+  geometry-coupled Linear-to-fused FP8 workstreams and registrations required before target
+  integration.
