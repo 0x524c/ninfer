@@ -35,10 +35,11 @@ MTP-private 和 Vision 权重的 format 与 geometry 没有变化，因此不需
 
 本清单从 14 个未完成的完整 registration 开始：6 个 generic FP8 Linear、1 个 embedding，以及
 7 个复用 Linear contraction 实现的 fused/专用 projection registration。当前 `[14336,5120]`
-纵向工作流的 L2 generic Linear 与 A1 `attn_input_proj` 均已完成：两者都接纳全部正 `T`、A16/A8
+的 L2/A1 与 `[16384,5120]` 的 L3/G1 纵向工作流均已完成；它们都接纳全部正 `T`、A16/A8
 arithmetic profile 和 caller workspace，并采用 `T=1` 使用 A16、每个 `T>=2` 使用 A8 的最终
-production boundary；A1 直接写入 Q/K/gate/V 四个 allocation。Artifact 中另外 112 个 NVFP4
-parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称相同便假定已覆盖。
+production boundary。A1 直接写入 Q/K/gate/V，G1 直接写入 QKV/Z；G2/G3 仍待完成。Artifact
+中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format 名称
+相同便假定已覆盖。
 
 ## 2. 固定执行事实
 
@@ -257,6 +258,29 @@ production 选择。该未达到的参考值记录为测量结果，不再作为
 `T=1..48` 曲线、A16/A8 boundary、workspace、正 `T` domain、四输出 oracle 和 `T=1024`
 roofline 目标现已共同完成，因此 L2→A1 纵向工作流已退出。
 
+### 2.7 当前 L3→G1 里程碑
+
+`[N,K]=[16384,5120]` 的 generic `linear` 与 G1 `gdn_input_proj` 已完成以下资格验证：
+
+- 两个 public Op 都注册全部正 `T`、`A16Only`、`AllowA8` 和真实 caller-workspace capacity；
+  `AllowA8` 在 `T=1` 解析为 A16，在每个 `T>=2` 解析为 A8；
+- L3 显式注册该 geometry 的 A16/A8 production schedule，同时复用既有 GEMV、activation
+  quantization 和 MMA mainloop；G1 直接写入 `qkv [10240,T]` 与 `z [6144,T]`；
+- public Linear 的 A16/A8 与 public G1 的 Q/K/V/Z row range、非整 tile tail 和 `T=1024` 均通过
+  独立 E4M3FN/BF16-row-scale decode 加 naive-FP64 oracle；workspace query 与 execution high-water
+  一致，已有 Q4/Q5、W8 和 NVFP4 G1 form 保持通过；
+- RTX 5090、CUDA 13.1、cold-cache、30 次 public-call 测量中，L3 的 `T=1` median 为
+  `60.672 us`；`T=2` A8 为 `64.768 us`，而 A16 为 `118.752 us`；最终 A8 的 `T=2..48`
+  保持在 `64.640..66.560 us`；
+- L3 的 `T=1024` public median 为 `423.232 us`、`405.92 TFLOP/s`，达到 FP32-accumulate FP8
+  峰值 `419 TFLOP/s` 的 `96.88%`；完整 G1 为 `423.200 us`、`405.95 TFLOP/s`，同为
+  `96.88%`；
+- G1 的 `T=1` median 为 `60.640 us`，`T=2..48` 为 `66.560..68.288 us`。Split-output 没有
+  改变 L3 route boundary 或引入新的 latency cliff，因此没有增加 shape-private kernel 候选。
+
+L3→G1 的完整正 `T` domain、数值 profile、workspace、hot interval 和吞吐锚点已经完成。G2/G3
+仍需在各自的显式 `B/W/state` public domain 上独立资格验证，不能由本里程碑代替。
+
 ## 3. Artifact 到 consumer 的完整账本
 
 ### 3.1 Row-scaled FP8 parent
@@ -305,8 +329,8 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 | E1 | gather | `embedding` | `[248320,5120]` | gather `BF16 [5120,T]` | embedding，1 个 parent | [ ] |
 | L2 | generic | `linear` | `[14336,5120]` | `BF16 [14336,T]` | A1 工作流的 Linear 起步项 | [x]（T=1/A16、T>=2/A8；完整正 T 与性能目标已完成） |
 | A1 | fused projection | `attn_input_proj` | `[14336,5120]` | 独立 Q/gate/K/V 输出 | 16 个 parent | [x]（完整正 T；T=1/A16、T>=2/A8） |
-| L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [ ] |
-| G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [ ] |
+| L3 | generic | `linear` | `[16384,5120]` | `BF16 [16384,T]` | G1/G2/G3 工作流的 Linear 起步项 | [x]（完整正 T；T=1/A16、T>=2/A8） |
+| G1 | fused projection | `gdn_input_proj` | `[16384,5120]` | 独立 QKV 与 Z 输出 | 48 个 parent | [x]（完整正 T；T=1/A16、T>=2/A8） |
 | G2 | fused projection/state | `gdn_input_proj_conv_snapshot` | `[16384,5120]` | Q/K/V/Z 加 convolution-state snapshot | 同 48 个 parent | [ ] |
 | G3 | fused projection/record | `gdn_input_proj_conv_record` | `[16384,5120]` | Q/K/V/Z 加 replay projection record | 同 48 个 parent | [ ] |
 | L4 | generic | `linear` | `[34816,5120]` | `BF16 [34816,T]` | M1 工作流的 Linear 起步项 | [ ] |
@@ -455,26 +479,26 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
 
 ### G1 — 单 parent row-scaled FP8 `gdn_input_proj`
 
-- [ ] 紧接 L3 的 kernel 模板和 route 调优结果实现 G1，不等待其他 geometry；先把 output policy
+- [x] 紧接 L3 的 kernel 模板和 route 调优结果实现 G1，不等待其他 geometry；先把 output policy
   改成独立 qkv/z allocation，再直接测量完整 G1 call。
-- [ ] 接纳一个完整 FP8 `query_key_value_z` parent `[16384,5120]`。
-- [ ] 接受连续 `x BF16 [5120,T]`，覆盖每个正 `T`。
-- [ ] 写入两个独立的连续输出：
+- [x] 接纳一个完整 FP8 `query_key_value_z` parent `[16384,5120]`。
+- [x] 接受连续 `x BF16 [5120,T]`，覆盖每个正 `T`。
+- [x] 写入两个独立的连续输出：
 
   ```text
   qkv BF16 [10240,T]  # query 2048，key 2048，value 6144
   z   BF16 [6144,T]
   ```
 
-- [ ] 从同一 represented input 计算四个 projection。Z 不是后续 public `linear` call，也没有
+- [x] 从同一 represented input 计算四个 projection。Z 不是后续 public `linear` call，也没有
   可观察的 packed `[16384,T]` 结果。
-- [ ] 要求 input、parent、workspace、qkv 和 z 互不重叠。
-- [ ] 注册 `AllowA8`，扩展 `gdn_input_proj_workspace_capacity_bytes`，覆盖 exact FP8 problem
+- [x] 要求 input、parent、workspace、qkv 和 z 互不重叠。
+- [x] 注册 `AllowA8`，扩展 `gdn_input_proj_workspace_capacity_bytes`，覆盖 exact FP8 problem
   与每个正 `T` interval。
-- [ ] 默认沿用 L3 route；只有 G1 完整 split-output benchmark 能支持不同 route 分界。
-- [ ] 扩展独立 oracle，直接检查 Q、K、V、Z 逻辑 row range 与两个最终 allocation。
-- [ ] 保持 27B two-parent Q4/Q5、single-parent NVFP4 和 35B W8 form。
-- [ ] 扩展 public GDN-input benchmark，覆盖每个 `T=1..48`、route 分界和 `T=1024`。
+- [x] 默认沿用 L3 route；只有 G1 完整 split-output benchmark 能支持不同 route 分界。
+- [x] 扩展独立 oracle，直接检查 Q、K、V、Z 逻辑 row range 与两个最终 allocation。
+- [x] 保持 27B two-parent Q4/Q5、single-parent NVFP4 和 35B W8 form。
+- [x] 扩展 public GDN-input benchmark，覆盖每个 `T=1..48`、route 分界和 `T=1024`。
 
 ### G2 — row-scaled FP8 `gdn_input_proj_conv_snapshot`
 

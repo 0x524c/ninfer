@@ -35,6 +35,9 @@ void launch_fp8_decode(const Tensor& x, const Weight& weight, Tensor& out, cudaS
     case Fp8Problem::AttnInput:
         launch_exact<Fp8AttnInputGeometry>(x, weight, out, stream);
         return;
+    case Fp8Problem::GdnInput:
+        launch_exact<Fp8GdnInputGeometry>(x, weight, out, stream);
+        return;
     }
 }
 

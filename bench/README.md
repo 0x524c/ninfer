@@ -72,8 +72,8 @@ load, graph construction, and warmup do not enter topology counts.
 ## Linear Op benchmark
 
 `ninfer_linear_bench` measures only the public pure `linear()` contract. It supports Q4, Q5, Q6,
-W8, registered BF16 weights, the registered NVFP4 problems, and the FP8 `[14336,5120], T=1`
-registration. Existing formats use `--policy a16`; NVFP4 additionally supports `--policy a4`, and
+W8, registered BF16 weights, the registered NVFP4 problems, and the registered FP8 problems.
+Existing formats use `--policy a16`; NVFP4 additionally supports `--policy a4`, and
 FP8 supports `--policy a8`. Each permission lets the production resolver select the qualified
 route for the exact geometry and T. LinearAdd, LinearSwiGLU,
 LinearPair, Attention/GDN projections, and sparse MoE remain separate semantic Ops and are not
@@ -97,6 +97,8 @@ cmake --build build --parallel --target ninfer_linear_bench
   --qtype nvfp4 --policy a4 --n 14336 --k 5120 --t 1024
 ./build/bench/ninfer_linear_bench \
   --qtype fp8 --policy a8 --n 14336 --k 5120 --t 1
+./build/bench/ninfer_linear_bench \
+  --qtype fp8 --policy a8 --n 16384 --k 5120 --t 1024
 ```
 
 A continuous small-T sweep reuses one packed weight and one maximum-T activation/output
@@ -235,10 +237,10 @@ cmake --build build --parallel --target ninfer_gated_delta_net_bench ninfer_gdn_
 ## GDN input-projection Op benchmark
 
 `ninfer_gdn_input_proj_bench` measures all registered public `gdn_input_proj` forms: the 27B
-Q4/Q5 two-parent projection, the 35B W8 single-parent projection, and the 27B NVFP4 single-parent
-projection under either admitted policy. Every timed and profiled point is exactly one public Op
-call. Single-parent workspace is queried and allocated through the public capacity entry before
-timing; the benchmark has no private launchers, route controls, or candidate mode.
+Q4/Q5 two-parent projection, the 35B W8 single-parent projection, and the 27B NVFP4 or row-scaled
+FP8 single-parent projection under its admitted policies. Every timed and profiled point is exactly
+one public Op call. Single-parent workspace is queried and allocated through the public capacity
+entry before timing; the benchmark has no private launchers, route controls, or candidate mode.
 
 Cold cache is the primary model-layer condition. Reported logical traffic counts encoded weights
 once, BF16 input once, and QKV/Z outputs once. FLOPs describe the complete registered projection.
@@ -252,6 +254,8 @@ cmake --build build --parallel --target ninfer_gdn_input_proj_bench
   --csv-out profiles/bench/gdn_input_proj.csv
 ./build/bench/ninfer_gdn_input_proj_bench \
   --format nvfp4 --nvfp4-policy a4 --tokens 1024 --cache cold --profile
+./build/bench/ninfer_gdn_input_proj_bench \
+  --format fp8 --fp8-policy a8 --tokens 1,2,3,4,5,6,7,8 --cache cold
 ```
 
 ## GDN input projection/convolution/snapshot Op benchmark

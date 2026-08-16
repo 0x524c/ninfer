@@ -18,6 +18,8 @@ int run_fp8_a16() {
     };
     int failures = run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
                              {14336, 5120, 811U, Comparison::Sampled, true, invocations});
+    failures += run_shape("FP8_A16", ActivationCompute::A16, make_fp8_weight,
+                          {16384, 5120, 817U, Comparison::Sampled, true, invocations});
 
     auto packed = make_fp8_weight(14336, 5120, 823U);
     try {

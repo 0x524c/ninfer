@@ -47,13 +47,17 @@ void gdn_input_proj(const Tensor& x, const Weight& qk_weight, const Weight& valu
  *
  * - W8G32_F16S RowSplit [12288,2048], with stored row counts [2048,2048,4096,4096];
  * - NVFP4 BlockScaleK16M128x4 [16384,5120], with stored row counts [2048,2048,6144,6144].
+ * - FP8_E4M3FN_ROW_BF16S RowScale [16384,5120], with stored row counts
+ *   [2048,2048,6144,6144].
  *
  * The first three ranges are written contiguously to qkv and the final range is written to z.
  * W8 admits A16 only. NVFP4 admits A16Only and AllowA4; AllowA4 permits private activation
- * quantization at every positive T. Every route writes the two
- * independent final allocations directly. The complete projection is evaluated against the same
- * exact-decode/naive-FP64 oracle; activation quantization and the production reduction profile are
- * private effects covered by the selected criterion. x, qkv, and z must be pairwise
+ * quantization at every positive T. FP8 admits A16Only and AllowA8 at every positive T; AllowA8
+ * selects A16 at T=1 and private activation quantization followed by A8 Tensor Core contraction
+ * at every T>=2. Every route writes the two independent final allocations directly. The complete
+ * projection is evaluated against the same exact-decode/naive-FP64 oracle; activation
+ * quantization and the production reduction profile are private effects covered by the selected
+ * criterion. x, both persistent weight planes, qkv, z, and the live workspace must be mutually
  * non-overlapping.
  *
  * The policy-bearing form uses caller-owned call-scoped transient storage sized by

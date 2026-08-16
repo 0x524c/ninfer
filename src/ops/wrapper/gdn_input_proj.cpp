@@ -1,6 +1,7 @@
 #include "ninfer/ops/gdn_input_proj.h"
 
 #include "core/layout.h"
+#include "ops/gdn_input_proj/fp8/fp8_gdn_input_plan.h"
 #include "ops/gdn_input_proj/gdn_projected_conv.h"
 #include "ops/gdn_input_proj/nvfp4/nvfp4_gdn_input_plan.h"
 #include "ops/gdn_input_proj/nvfp4/nvfp4_gdn_snapshot_plan.h"
@@ -8,6 +9,8 @@
 #include "ops/gdn_input_proj/q4_q5/q4_q5_gdn_input_plan.h"
 #include "ops/gdn_input_proj/w8/w8_gdn_input_kernels.h"
 #include "ops/gdn_input_proj/w8/w8_gdn_input_plan.h"
+#include "ops/linear/fp8/fp8_config.h"
+#include "ops/linear/fp8/fp8_format.h"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_format.h"
 
@@ -248,6 +251,26 @@ void dispatch_single_parent(const Tensor& x, const Weight& weight, Tensor& qkv, 
             throw std::invalid_argument("nvfp4 gdn_input_proj: unsupported weight shape");
         }
         detail::nvfp4_gdn_input_dispatch(x, weight, qkv, z, policy, workspace, stream);
+        return;
+    }
+
+    if (weight.qtype == QType::FP8_E4M3FN_ROW_BF16S) {
+        constexpr std::int32_t kHidden  = 5120;
+        constexpr std::int32_t kQkvRows = 10240;
+        constexpr std::int32_t kZRows   = 6144;
+        constexpr std::int32_t kRows    = kQkvRows + kZRows;
+        if (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA8) {
+            throw std::invalid_argument("FP8 gdn_input_proj admits only A16 or A8");
+        }
+        require_matrix(x, kHidden, cols, "x");
+        require_matrix(qkv, kQkvRows, cols, "qkv");
+        require_matrix(z, kZRows, cols, "z");
+        require_single_parent_nonoverlap(x, qkv, z);
+        detail::validate_fp8_weight(weight, "fp8 gdn_input_proj");
+        if (weight.n != kRows || weight.k != kHidden) {
+            throw std::invalid_argument("fp8 gdn_input_proj: unsupported weight shape");
+        }
+        detail::fp8_gdn_input_dispatch(x, weight, qkv, z, policy, workspace, stream);
         return;
     }
 
@@ -584,6 +607,14 @@ std::size_t gdn_input_proj_workspace_capacity_bytes(QType parent_qtype, std::int
             throw std::invalid_argument("gdn_input_proj workspace: unsupported NVFP4 profile");
         }
         return detail::nvfp4_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
+    }
+    if (parent_qtype == QType::FP8_E4M3FN_ROW_BF16S) {
+        if (parent_rows != detail::Fp8GdnInputGeometry::kOutputRows ||
+            input_rows != detail::Fp8GdnInputGeometry::kInputRows ||
+            (policy != LinearPolicy::A16Only && policy != LinearPolicy::AllowA8)) {
+            throw std::invalid_argument("gdn_input_proj workspace: unsupported FP8 profile");
+        }
+        return detail::fp8_gdn_input_workspace_capacity_bytes(policy, min_tokens, max_tokens);
     }
     if (parent_qtype == QType::W8G32_F16S && parent_rows == 12288 && input_rows == 2048 &&
         policy == LinearPolicy::A16Only) {
