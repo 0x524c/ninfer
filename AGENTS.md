@@ -299,6 +299,9 @@ run and why.
 
 ## Local environment
 
+Use unrestricted build-tool parallelism for repository compilation. Invoke CMake builds as
+`cmake --build <build-dir> -j`; do not supply a numeric job limit such as `-j2` or `-j32`.
+
 These are conventional project resources, not a checklist of resources every task must use:
 
 | Purpose | Path |
