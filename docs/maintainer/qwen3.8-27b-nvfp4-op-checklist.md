@@ -48,6 +48,9 @@ Q/K/gate/V，G1 直接写入 QKV/Z，M1 直接写入最终
 SwiGLU 结果，R1/R2 直接完成原地 residual 更新；G2/G3 也已完成独立的 snapshot/record route、
 workspace、完整公式验证和 public benchmark。L1 output-head Linear 与 E1 embedding 也已完成，
 14 个精确 row-scaled FP8 registration 已全部交付。
+随后按 artifact parent 与实际 Text 调用路径进行的审计还发现一个 existing-format storage-form
+缺口：BF16 GDN control 必须直接消费完整 `a_b_projection [96,5120]` parent。C1 已补齐该精确
+contiguous-parent registration；它不改变上述 14 个 FP8 registration 的计数。
 Artifact 中另外 112 个 NVFP4 parent 已有精确支持；第 12 节单独记录其核对依据，不能只因 format
 名称相同便假定已覆盖。
 
@@ -432,6 +435,15 @@ consumer 工作流的实现与调优起点，不会在 target schedule 中额外
 attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额外 registration 的存在
 不会增加本文工作量。
 
+### 3.3 Existing-format BF16 fused parent
+
+| Artifact 角色 | 完整 parent `[N,K]` | 层/位置 | 精确 consumer | 状态 |
+|---|---:|---:|---|---|
+| GDN A/B control projection | `[96,5120]` | 48 个 GDN layer | `gdn_norm_gating_proj` contiguous-parent form | [x] |
+
+该 parent 的 BF16 算术与 `[48,5120]` A/B 两权重形式相同，但 artifact storage contract 要求主 Op
+接收完整不可分 parent，因此需要独立的 public-form admission；不能用两个持久化 Weight 替代。
+
 ## 4. 必需 registration 总表
 
 共需 14 个精确 row-scaled FP8 registration：
@@ -457,6 +469,12 @@ attention-input、GDN-input 或 `[5120,6144]` residual registration；这些额�
 selector 中。总表按 geometry 把 Linear 起步项与实际 Op 相邻排列：L2→A1、L3→G1/G2/G3、
 L4→M1、L5→R1、L6→R2。L2..L6 虽然各自是有效的 Linear registration，但必须与相邻的
 A/G/M/R 项作为一条连续工作流推进。
+
+除上述 14 个 FP8 项外，C1 是 artifact parent 审计要求的 existing-format registration：
+
+| ID | 类别 | 语义 Op | 精确 BF16 parent `[N,K]` | Public 结果/效果 | 状态 |
+|---|---|---|---:|---|---|
+| C1 | fused control projection | `gdn_norm_gating_proj` | `[96,5120]` | `h BF16 [5120,T]`、`g/beta FP32 [48,T]` | [x]（完整正 T；复用既有 27B route） |
 
 ## 5. 各纵向工作流的通用 FP8 Linear 起步项：L1..L6
 
@@ -847,11 +865,11 @@ geometry。其 Linear、normalization、bias、GELU、RoPE、attention、merger 
 
 ### 12.3 非 projection Text Op
 
-Text norm、GDN A/B control projection、convolution weight、A-log、dt-bias、recurrent GDN
+Text norm、GDN A/B control projection 的算术、convolution weight、A-log、dt-bias、recurrent GDN
 transition、gated RMSNorm、RoPE、softmax attention、sigmoid gate、sampling、argmax、state
-selection 和 scalar/index transform 保持现有 represented input 与效果。Row-scaled FP8 在所属
-projection 边界被消费并产生 BF16 语义结果，不会产生新的 attention、recurrent-state、pointwise、
-cache 或 sampling Op。
+selection 和 scalar/index transform 保持现有 represented input 与效果。GDN A/B 的持久化边界改为
+单一 `[96,5120]` parent，由 C1 覆盖。Row-scaled FP8 在所属 projection 边界被消费并产生 BF16
+语义结果，不会产生新的 attention、recurrent-state、pointwise、cache 或 sampling Op。
 
 Artifact reader、`row-scale-v1` materialization、`QType` mapping 和 FP8 embedding encoder 已在
 representation/producer 边界受到保护；这些检查不能计作上述 14 个 Op registration 中的任何一个。
