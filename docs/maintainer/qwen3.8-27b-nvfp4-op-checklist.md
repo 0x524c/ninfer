@@ -161,6 +161,47 @@ Generic Linear 是同一 geometry 下实现实际 Op 的起步形式，不是一
 kernel/mainloop 立即改造成 attention、GDN、SwiGLU 或 residual 所需的输出形式；它不是“先做完
 所有 Linear，再另起一个 fused 阶段”。
 
+### 2.5 本轮 kernel 建立与 route 调优目标
+
+L1..L6 以及由 L2..L6 连续改造得到的 rank-two projection Op 使用以下统一尺度。它既规定第一个
+代表性 geometry 的打通过程，也规定后续 geometry 如何复用模板；E1、G2 和 G3 的不同执行域在本节
+末尾单独说明。
+
+- [ ] 开始第一个 FP8 contraction kernel 前，从 L2..L6 选择并记录一个代表性 geometry。选择必须
+  同时给出其紧邻的实际 consumer、预期复用的 contraction mainloop 和需要参数化的 output
+  boundary，不能选择一个没有实际 Op 落点的合成 problem。
+- [ ] 该 geometry 先打通完整 public Linear 链路：row-FP8 Weight admission、`AllowA8`、workspace
+  capacity、独立 fixture/oracle、conformance test 和 public Linear benchmark。Kernel 候选只能在
+  这些入口能够验证真实 registration 后开始计时。
+- [ ] 首先实现和调优 `T=1` kernel。每个候选以编译期 schedule 参数形成明确实例；临时 benchmark
+  可以直接调用内部 launcher 强制候选，但必须使用相同输入、cache 状态、设备和 timing 方法，并在
+  候选进入 production selector 后通过 public Linear 重新验证。
+- [ ] 随后实现一个或多个 small-T kernel family，对每个整数 `T=2..48` sweep 所有合法重叠候选。
+  `T=1..48` 是本 artifact 的完整 latency hot interval，覆盖 `B<=8` 与 `W<=6` 的并发和
+  speculative-decode 上界；即使某个整数不能直接写成当前的 `B*W`，也保留连续 sweep，以确定稳定
+  crossover 并观察相邻 extent 的延迟。
+- [ ] Hot interval 内按逐 T 测量选择最低且可重复的 route。最终 public benchmark 必须只调用
+  public Op，并报告完整 `T=1..48` latency 曲线及相邻 median 变化；每个 production boundary 在
+  `b-1/b/b+1` 重新验证。不得保留可由另一合法候选避免的明显 latency cliff；候选差异落在测量
+  不确定度内时，采用边界更稳定且更便于同一 kernel 模板复用的选择。
+- [ ] Hot interval route 收敛后，再实现承担大 T 的 MMA、TMA 或其他必要 kernel family。
+  `T=1024` 是 Text projection prefill 的主性能锚点；必须测量 production selector 实际采用的 A8
+  Tensor Core route，并以其 FP8 tensor-core roofline 作为调优退出目标。`T>48` 不做逐 T 密集
+  candidate sweep，只测决定 crossover 所需的少量点、最终 route boundary 和代表性 interior；允许
+  从 hot interval 进入 prefill route 时出现有依据的跃变。
+- [ ] `T=1`、small-T 和 MMA 是当前起始顺序，不是三个固定且封闭的 kernel 类别。只有现有候选不能
+  覆盖上述 hot-interval 延迟或 `T=1024` roofline 目标时，才增加新的 kernel family 或编译期参数；
+  不预先实例化参数笛卡尔积，最终删除落选实例和失去用途的 knob。
+- [ ] Linear route 和可参数化 kernel 模板一旦足以支持当前 geometry，就立即修改输出路径形成相邻
+  A/G/M/R Op，并在其完整 public call 上重复 `T=1..48` 曲线、boundary 和适用的 `T=1024`
+  验证。Epilogue/post 改变最终 winner 时，以实际 Op 的 public 结果为准，不继续扩张独立 Linear
+  调优阶段。
+
+L1 output head 同样覆盖 `T=1..48` hot interval，但不是 Text prefill 的 `T=1024` Tensor Core
+锚点。E1 对 `T=1..48` 和 `T=1024` 测量完整 gather，但不套用 contraction roofline。G2/G3 保留
+显式 `[rows,W,B]` 语义：hot-path sweep 覆盖当前产品可达的 `B=1..8`、`W<=6` 组合及其 public
+boundary，不能为了复用 rank-two 曲线而把状态 Op 的 public domain 展平为任意 `T`。
+
 ## 3. Artifact 到 consumer 的完整账本
 
 ### 3.1 Row-scaled FP8 parent
@@ -249,7 +290,8 @@ A/G/M/R 项作为一条连续工作流推进。
   模板并给出实际 Op 的初始 route。计时必须包含 activation quantization、workspace traffic 和
   完整 Linear call，不能用 private mainloop timing 代替。
 - [ ] 在 RTX 5090/CUDA 13.1 上为该 geometry 的实际生产 extent 和所有 route 分界建立足够的
-  选路证据；无需为没有决策价值的所有 `T` 穷举。
+  选路证据：hot interval 按第 2.5 节穷举 `T=1..48`，更大 extent 只测决定 prefill route 所需的
+  稀疏点并以 `T=1024` 为主锚点。
 - [ ] 把调优得到的 geometry、schedule、kernel primitive、output-policy 接口、activation
   workspace recipe 和初始 route facts 放在 Linear-owned 实现中，然后立即用它实现对应
   A/G/M/R consumer。保留仍需在实际 Op 中比较的候选，待完整 public route 确定后再删除落选
@@ -260,12 +302,12 @@ A/G/M/R 项作为一条连续工作流推进。
 
 | ID | 输入 `x` | 输出 `out` | 关键实测 extent | 直接用途及后续复用 |
 |---|---|---|---|---|
-| L1 | `BF16 [5120,T]` | `BF16 [248320,T]` | decode `T=1..8`、MTP 聚合列数至 48、route boundary | full output head 的真实 public consumer；不对应 fused 项 |
-| L2 | `BF16 [5120,T]` | `BF16 [14336,T]` | decode `1..8`、MTP 至 48、prefill `1024`、route boundary | 调优后立即改造成 A1 |
-| L3 | `BF16 [5120,T]` | `BF16 [16384,T]` | decode `1..8`、MTP 至 48、prefill `1024`、route boundary | 调优后立即改造成 G1，并供 G2/G3 复用 |
-| L4 | `BF16 [5120,T]` | `BF16 [34816,T]` | decode `1..8`、MTP 至 48、prefill `1024`、route boundary | 调优后立即改造成 M1 |
-| L5 | `BF16 [6144,T]` | `BF16 [5120,T]` | decode `1..8`、MTP 至 48、prefill `1024`、route boundary | 调优后立即改造成 R1 |
-| L6 | `BF16 [17408,T]` | `BF16 [5120,T]` | decode `1..8`、MTP 至 48、prefill `1024`、route boundary | 调优后立即改造成 R2 |
+| L1 | `BF16 [5120,T]` | `BF16 [248320,T]` | hot interval 每个 `T=1..48`、route boundary | full output head 的真实 public consumer；不对应 fused 项 |
+| L2 | `BF16 [5120,T]` | `BF16 [14336,T]` | hot interval 每个 `T=1..48`、prefill `T=1024`、route boundary | 调优后立即改造成 A1 |
+| L3 | `BF16 [5120,T]` | `BF16 [16384,T]` | hot interval 每个 `T=1..48`、prefill `T=1024`、route boundary | 调优后立即改造成 G1，并供 G2/G3 复用 |
+| L4 | `BF16 [5120,T]` | `BF16 [34816,T]` | hot interval 每个 `T=1..48`、prefill `T=1024`、route boundary | 调优后立即改造成 M1 |
+| L5 | `BF16 [6144,T]` | `BF16 [5120,T]` | hot interval 每个 `T=1..48`、prefill `T=1024`、route boundary | 调优后立即改造成 R1 |
+| L6 | `BF16 [17408,T]` | `BF16 [5120,T]` | hot interval 每个 `T=1..48`、prefill `T=1024`、route boundary | 调优后立即改造成 R2 |
 
 L1 的 `linear` 不带 vocabulary-domain 语义。下游 sampling 和 `argmax` 继续接收现有 valid-row
 limit `248077`；它们不因 physical output 有 248320 行而新增 format admission。
@@ -289,8 +331,8 @@ L2..L6 的 dense BF16 输出是 public Linear 自身的真实结果，也是开�
 - [ ] 扩展独立 embedding fixture：独立精确解码 E4M3FN/BF16 row，覆盖 signed zero、zero-scale
   row、重复/边界 id、全部输出元素、未修改输入，以及 malformed row-scale metadata。
 - [ ] 保持 dense BF16、Q6-D5120、W8-D5120 和 W8-D2048 embedding admission 与回归。
-- [ ] 在 public embedding benchmark 中加入该 exact profile，覆盖普通 `T=1..8`、MTP 聚合列数
-  至 48，以及代表性 prefill chunk。
+- [ ] 在 public embedding benchmark 中加入该 exact profile，覆盖每个 `T=1..48`，并以 `T=1024`
+  作为 prefill gather 的主要吞吐点。
 
 E1 没有 activation-compute policy：它只 gather 并重建选中 row，不执行 activation matrix
 contraction。它是独立工作流，不参与 Linear 到实际 projection Op 的连续改造过程。
@@ -335,8 +377,8 @@ contraction。它是独立工作流，不参与 Linear 到实际 projection Op �
 - [ ] 扩展独立 full-Op oracle，检查所有四段 row、语义输出位置和全部输出，而不是只检查 aggregate
   projection error 或与 L2 做 parity。
 - [ ] 保持 two-parent 27B Q4/Q5、single-parent 27B BF16/NVFP4 和 35B W8 admission。
-- [ ] 扩展 public Attention-input benchmark，覆盖生产 aggregate extent、route 分界和主要
-  `T=1024` prefill 点。
+- [ ] 扩展 public Attention-input benchmark，覆盖每个 `T=1..48`、route 分界和主要 `T=1024`
+  prefill 点。
 
 ## 8. GDN 输入投影族
 
@@ -376,7 +418,7 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
 - [ ] 默认沿用 L3 route；只有 G1 完整 split-output benchmark 能支持不同 route 分界。
 - [ ] 扩展独立 oracle，直接检查 Q、K、V、Z 逻辑 row range 与两个最终 allocation。
 - [ ] 保持 27B two-parent Q4/Q5、single-parent NVFP4 和 35B W8 form。
-- [ ] 扩展 public GDN-input benchmark，覆盖生产 aggregate extent、route 分界和 `T=1024`。
+- [ ] 扩展 public GDN-input benchmark，覆盖每个 `T=1..48`、route 分界和 `T=1024`。
 
 ### G2 — row-scaled FP8 `gdn_input_proj_conv_snapshot`
 
@@ -488,9 +530,9 @@ G2/G3。G1、G2、G3 复用 L3 的 geometry、decoder、mainloop、schedule 和 
 - [ ] 从精确解码的 FP8 row 和 represented BF16 input 扩展独立 complete-formula oracle，直接检查
   最终输出；A16/A8 profile 仅在 arithmetic profile 实质不同的情况下使用不同的具名 criterion。
 - [ ] 保持现有 Q4、W8 和 NVFP4 LinearSwiGLU registration。
-- [ ] 在 public LinearSwiGLU benchmark 中加入 FP8 profile，覆盖生产 aggregate extent、route
-  boundary 和 `T=1024`。计时把 activation quantization、workspace traffic、contraction 与 SwiGLU
-  视为一次完整 public call。
+- [ ] 在 public LinearSwiGLU benchmark 中加入 FP8 profile，覆盖每个 `T=1..48`、route boundary
+  和 `T=1024`。计时把 activation quantization、workspace traffic、contraction 与 SwiGLU 视为
+  一次完整 public call。
 
 ## 10. 残差投影
 
@@ -536,7 +578,7 @@ mainloop 必须分别复用 L5/L6。
 R1 与 R2 共同还需：
 
 - [ ] 保持 Q5、W8、BF16 和 NVFP4 LinearAdd registration 及其 policy domain。
-- [ ] 在 public LinearAdd benchmark 中加入两个 FP8 geometry，覆盖生产 aggregate extent、route
+- [ ] 在 public LinearAdd benchmark 中加入两个 FP8 geometry，覆盖每个 `T=1..48`、route
   boundary 和 `T=1024`；计时必须包含 activation quantization、residual traffic 和所选的全部
   semantic kernel。
 
@@ -632,8 +674,9 @@ representation/producer 边界受到保护；这些检查不能计作上述 14 �
 - [ ] 扩展 wrapper 所影响的 Qwen3.6/Qwen3.8 groupwise、Qwen3.6 NVFP4、35B W8、MTP 与 Vision
   Op regression 保持通过。
 - [ ] 相应长期 public Op benchmark 接纳 FP8 exact geometry 并报告完整 call。Production dispatch
-  依据 RTX 5090/CUDA 13.1 上 target extent 的测量选择；private kernel-only 胜出或 unpack-to-dense
-  fallback 都不足以完成该项。
+  依据 RTX 5090/CUDA 13.1 上第 2.5 节规定的 hot-interval latency 曲线、route boundary 和适用的
+  `T=1024` roofline 证据选择；private kernel-only 胜出或 unpack-to-dense fallback 都不足以完成
+  该项。
 - [ ] 临时候选控制、重复 decoder、落选实现和 benchmark-only private entry point 在 production
   选择后删除。
 
@@ -653,9 +696,10 @@ representation/producer 边界受到保护；这些检查不能计作上述 14 �
    L6 -> 调优/模板化 -> R2
    ```
 
-3. 在选中的工作流内连续完成：generic Linear correctness → 实际 extent 调优 → 可扩展 kernel 模板
-   → 实际 output policy/epilogue/post → complete-Op oracle → 完整 public benchmark。模板形成后不得
-   转去批量完成其他 Linear，必须先把当前 geometry 推进到实际 consumer。
+3. 在选中的工作流内按第 2.5 节连续完成：public registration → `T=1` kernel → `T=2..48`
+   small-T kernel 与逐点 route → `T=1024` 主锚点的大 T kernel → 可扩展 kernel 模板 → 实际
+   output policy/epilogue/post → complete-Op oracle → 完整 public benchmark。模板形成后不得转去
+   批量完成其他 Linear，必须先把当前 geometry 推进到实际 consumer。
 4. 后续 geometry 可以实例化和扩展已经形成的公共模板；每次仍先用其 generic Linear exact point
    校准 correctness/route，随后立即实现该 geometry 的实际 Op。公共模板变化时，只回归受影响的
    已完成工作流。

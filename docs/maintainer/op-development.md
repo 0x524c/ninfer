@@ -441,6 +441,49 @@ production dispatch; verify final correctness and performance through the public
 the losing candidates, temporary controls, and comparison-only entry points. The selected
 production implementation is not temporary merely because it originated in the sweep.
 
+### 7.1 Route-development transaction
+
+Develop a new optimized route as one vertical transaction around a representative registered
+problem. First establish the public admission, validation, workspace query, independent oracle
+case, and public benchmark point needed to exercise that problem. Then grow kernel candidates from
+the smallest production extent through the latency-sensitive workload and finally into the
+large-extent throughput regime. These regimes describe tuning order, not semantic entries or a
+required closed taxonomy of kernels.
+
+Each kernel family may expose compile-time schedule parameters that distinguish concrete,
+plausible candidates. Instantiate only the small overlapping candidate set needed to answer a live
+decision; do not create a Cartesian product of speculative knobs. Add another family or parameter
+only when evidence shows that the existing candidates cannot cover a relevant part of the
+workload. Once dispatch is selected, retain the winning instances and parameters and remove losing
+candidates and unused knobs.
+
+Derive the latency-sensitive **hot interval** from the active product workload rather than fixing a
+repository-wide extent. Within that interval, a temporary private-launcher sweep may compare every
+relevant extent. Use it to establish the pointwise performance envelope, candidate crossovers, and
+adjacent-extent latency changes. Production dispatch should stay close to that envelope while
+keeping latency progression and route boundaries stable; a boundary needs repeatable benefit
+larger than measurement uncertainty and must not introduce an avoidable latency cliff. Do not add
+a universal percentage threshold: the task records the timing conditions and the scale needed to
+distinguish its candidates.
+
+Beyond the hot interval, select the small number of large-extent anchors that represent the actual
+bulk workload. Optimize the primary anchor for throughput and for the roofline of the execution
+resource used by the selected route. Use sparse supporting points and as few broad routes as the
+evidence permits; a reasonable transition discontinuity is acceptable here. A permissive public
+policy does not prove that a particular accelerator route ran, so roofline evidence must identify
+and measure the implementation that production dispatch actually selects.
+
+When a valid simple Op is the development surface for a related fused Op or epilogue, tune the
+shared computation on that simple form, make the selected kernel body parameterizable at its output
+boundary, and immediately adapt it to the actual complete Op in the same transaction. This is not
+a repository-wide simple-Op phase. The complete public fused Op, including its epilogue, post work,
+workspace traffic, outputs, and state effects, determines its final route and completion evidence.
+
+Before timing, qualify each candidate arithmetic profile against the independent oracle. After
+encoding the selected instances and boundaries in production dispatch, requalify boundary and
+interior cases and remeasure the latency curve or throughput anchor through the public Op. The
+temporary sweep and its private entry points are then removed as described above.
+
 An Op-scoped performance claim ends at the public Op boundary. Exact formats, layouts, shapes, and
 extents can be constructed directly by the Op benchmark; they do not authorize loading a model
 artifact or invoking a target, Program, Engine, or whole-round benchmark. Product-route evidence is
