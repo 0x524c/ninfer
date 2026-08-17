@@ -2,6 +2,7 @@
 #include <ninfer/targets/qwen3_6/frontend_resources.h>
 
 #include "targets/qwen3_6/impl/frontend/chat_template.h"
+#include "targets/qwen3_6/impl/frontend/processor.h"
 #include "targets/qwen3_6/impl/frontend/test_access.h"
 #include "targets/qwen3_6/impl/frontend/tokenizer.h"
 
@@ -247,6 +248,16 @@ bool throws_invalid_argument(Callable&& callable) {
     try {
         callable();
     } catch (const std::invalid_argument&) { return true; }
+    return false;
+}
+
+template <class Callable>
+bool throws_processor_budget(Callable&& callable) {
+    try {
+        callable();
+    } catch (const fi::ProcessorError& error) {
+        return error.kind() == fi::ProcessorErrorKind::BudgetExceeded;
+    }
     return false;
 }
 
@@ -805,6 +816,49 @@ int test_text_and_image_prepare(const Frontend& frontend) {
     return failures;
 }
 
+int test_media_admission_uses_aggregate_resources(const Frontend& frontend) {
+    constexpr std::size_t kMediaItems     = 17;
+    const std::vector<std::uint8_t> bytes = gradient_ppm();
+    ninfer::ChatMessage message;
+    message.role = ninfer::ChatRole::User;
+    for (std::size_t index = 0; index < kMediaItems; ++index) {
+        ninfer::OwnedMedia media;
+        media.kind        = ninfer::MediaKind::Image;
+        media.bytes       = bytes;
+        media.media_type  = "image/x-portable-pixmap";
+        media.source_name = "aggregate-" + std::to_string(index) + ".ppm";
+        message.parts.push_back(ninfer::MessagePart{
+            .kind = ninfer::MessagePartKind::Media, .text = {}, .media = std::move(media)});
+    }
+    ninfer::PromptInput input;
+    input.messages.push_back(std::move(message));
+    const auto prepared = frontend.prepare(std::move(input));
+    const auto& data    = FrontendFactory::inspect(prepared);
+    int failures        = check(data.prepare.media_items == kMediaItems &&
+                                    data.prepare.media_bytes == kMediaItems * bytes.size() &&
+                                    data.prepare.raw_patches == kMediaItems * 16 &&
+                                    data.prepare.vision_tokens == kMediaItems * 4 &&
+                                    data.vision_items.size() == kMediaItems,
+                                "frontend retained an item-count admission limit");
+
+    fi::ProcessorOptions options;
+    options.max_encoded_media_bytes = bytes.size() * 2 - 1;
+    fi::Processor processor(official_tokenizer(), thinking_toggle_template(), options);
+    fi::ChatMessage internal_message;
+    internal_message.role = ninfer::ChatRole::User;
+    for (std::size_t index = 0; index < 2; ++index) {
+        internal_message.parts.push_back(
+            fi::ChatPart::image(fi::MediaData{.bytes       = bytes,
+                                              .media_type  = "image/x-portable-pixmap",
+                                              .source_name = "byte-budget.ppm"}));
+    }
+    failures += check(throws_processor_budget([&] {
+                          (void)processor.process(std::vector<fi::ChatMessage>{internal_message});
+                      }),
+                      "processor did not enforce the aggregate encoded-media byte budget");
+    return failures;
+}
+
 int test_multimodal_prompt_over_removed_32k_cap(const Frontend& frontend) {
     const std::string long_text(40'000, 'x');
     const std::uint32_t counted =
@@ -1041,6 +1095,7 @@ int main() {
     failures += test_rewrite_checkpoint_trace();
     failures += test_official_resource_guards();
     failures += test_text_and_image_prepare(frontend);
+    failures += test_media_admission_uses_aggregate_resources(frontend);
     failures += test_multimodal_prompt_over_removed_32k_cap(frontend);
     failures += test_attention_pairs_are_diagnostic(frontend);
     failures += test_video_prepare(frontend);

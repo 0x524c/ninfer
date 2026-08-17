@@ -21,17 +21,18 @@
 namespace ninfer::targets::qwen3_6::frontend_internal {
 namespace {
 
-constexpr int kPatch                    = 16;
-constexpr int kTemporal                 = 2;
-constexpr int kMerge                    = 2;
-constexpr int kFactor                   = kPatch * kMerge;
-constexpr int kPatchFeatures            = 3 * kTemporal * kPatch * kPatch;
-constexpr int kImageToken               = 248056;
-constexpr int kVideoToken               = 248057;
-constexpr std::string_view kImagePad    = "<|image_pad|>";
-constexpr std::string_view kVideoPad    = "<|video_pad|>";
-constexpr std::string_view kVisionStart = "<|vision_start|>";
-constexpr std::string_view kVisionEnd   = "<|vision_end|>";
+constexpr int kPatch                              = 16;
+constexpr int kTemporal                           = 2;
+constexpr int kMerge                              = 2;
+constexpr int kFactor                             = kPatch * kMerge;
+constexpr int kPatchFeatures                      = 3 * kTemporal * kPatch * kPatch;
+constexpr int kImageToken                         = 248056;
+constexpr int kVideoToken                         = 248057;
+constexpr std::uint64_t kMinimumRawPatchesPerItem = kMerge * kMerge;
+constexpr std::string_view kImagePad              = "<|image_pad|>";
+constexpr std::string_view kVideoPad              = "<|video_pad|>";
+constexpr std::string_view kVisionStart           = "<|vision_start|>";
+constexpr std::string_view kVisionEnd             = "<|vision_end|>";
 
 struct Size {
     int h = 0;
@@ -394,10 +395,6 @@ void add_budget(PreprocessStats& stats, const VisionItem& item) {
 }
 
 void enforce_media_resource_limits(const PreprocessStats& stats, const ProcessorOptions& options) {
-    if (stats.media_items > options.max_media_items) {
-        throw ProcessorError(ProcessorErrorKind::BudgetExceeded,
-                             "media item count exceeds processor budget");
-    }
     if (stats.raw_patches > options.max_raw_patches) {
         throw ProcessorError(ProcessorErrorKind::BudgetExceeded,
                              "vision raw patches exceed processor budget");
@@ -502,7 +499,7 @@ void validate_special_token(const Tokenizer& tokenizer, std::string_view text, i
 
 std::string PreprocessStats::summary() const {
     std::ostringstream out;
-    out << "media=" << media_items << " patches=" << raw_patches
+    out << "media=" << media_items << " media_bytes=" << media_bytes << " patches=" << raw_patches
         << " vision_tokens=" << vision_tokens << " attention_pairs=" << attention_pairs
         << " prompt_tokens=" << prompt_tokens << " patch_bytes=" << patch_bytes;
     return out.str();
@@ -542,12 +539,12 @@ EncodedChat encode_rendered_chat(const Tokenizer& tokenizer, const RenderedChat&
 Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& chat_template,
                      ProcessorOptions options)
     : tokenizer_(tokenizer), chat_template_(chat_template), options_(std::move(options)) {
-    if (options_.max_media_items == 0 || options_.max_media_bytes == 0 ||
-        options_.max_decoded_pixels == 0 || options_.max_decoded_video_pixels == 0 ||
-        options_.image_min_pixels == 0 || options_.image_max_pixels < options_.image_min_pixels ||
-        options_.video_min_pixels == 0 || options_.video_max_pixels < options_.video_min_pixels ||
-        !(options_.video_fps > 0.0) || options_.video_min_frames <= 0 ||
-        options_.video_max_frames < options_.video_min_frames ||
+    if (options_.max_encoded_media_bytes == 0 || options_.max_decoded_pixels == 0 ||
+        options_.max_decoded_video_pixels == 0 || options_.max_raw_patches == 0 ||
+        options_.max_vision_tokens == 0 || options_.image_min_pixels == 0 ||
+        options_.image_max_pixels < options_.image_min_pixels || options_.video_min_pixels == 0 ||
+        options_.video_max_pixels < options_.video_min_pixels || !(options_.video_fps > 0.0) ||
+        options_.video_min_frames <= 0 || options_.video_max_frames < options_.video_min_frames ||
         options_.max_video_source_frames < options_.video_max_frames ||
         !(options_.max_video_duration_seconds > 0.0)) {
         throw std::invalid_argument("processor budgets must be positive");
@@ -559,13 +556,23 @@ Processor::Processor(const Tokenizer& tokenizer, const CompiledChatTemplate& cha
 ProcessedInput Processor::process(const std::vector<ChatMessage>& messages,
                                   ChatRenderOptions render_options) const {
     const std::vector<const ChatPart*> parts = media_parts(messages);
-    if (parts.size() > options_.max_media_items) {
+    const std::uint64_t maximum_items_from_extents =
+        std::min(options_.max_raw_patches / kMinimumRawPatchesPerItem, options_.max_vision_tokens);
+    if (std::cmp_greater(parts.size(), maximum_items_from_extents)) {
         throw ProcessorError(ProcessorErrorKind::BudgetExceeded,
-                             "media item count exceeds processor budget");
+                             "minimum Vision grids exceed processor extent budget");
+    }
+    std::size_t remaining_media_bytes = options_.max_encoded_media_bytes;
+    for (const ChatPart* part : parts) {
+        if (part->media.bytes.size() > remaining_media_bytes) {
+            throw ProcessorError(ProcessorErrorKind::BudgetExceeded,
+                                 "request media bytes exceed processor budget");
+        }
+        remaining_media_bytes -= part->media.bytes.size();
     }
     RenderedChat rendered = chat_template_.render(messages, std::move(render_options));
     const media::decode::Policy policy{
-        .max_bytes                  = options_.max_media_bytes,
+        .max_bytes                  = options_.max_encoded_media_bytes,
         .max_decoded_pixels         = options_.max_decoded_pixels,
         .max_decoded_video_pixels   = options_.max_decoded_video_pixels,
         .max_video_source_frames    = options_.max_video_source_frames,
@@ -576,6 +583,7 @@ ProcessedInput Processor::process(const std::vector<ChatMessage>& messages,
     items.reserve(parts.size());
     PreprocessStats stats;
     stats.media_items = parts.size();
+    stats.media_bytes = options_.max_encoded_media_bytes - remaining_media_bytes;
     for (const ChatPart* part : parts) {
         Prepared media;
         try {

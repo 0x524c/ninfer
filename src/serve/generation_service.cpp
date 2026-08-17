@@ -98,8 +98,7 @@ ApiError request_error_to_api_error(const ninfer::RequestError& exception) {
 
 namespace {
 
-using Clock                              = std::chrono::steady_clock;
-constexpr std::size_t kMaximumMediaItems = 16;
+using Clock = std::chrono::steady_clock;
 
 [[noreturn]] void throw_preparation_cancelled();
 
@@ -334,15 +333,10 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
     prepared.enable_thinking                   = semantics.enable_thinking;
     prepared.preserve_thinking                 = semantics.preserve_thinking;
     prepared.preserve_thinking_semantic_change = request.preserve_thinking_semantic_change;
-    const std::size_t media_items              = request.media_item_count();
-    const bool request_has_media               = media_items != 0;
+    const bool request_has_media               = request.media_item_count() != 0;
     if (request_has_media && !options_.enable_vision) {
         const std::invalid_argument error("Vision is disabled for this server");
         throw_invalid_input(error, "vision_disabled");
-    }
-    if (media_items > kMaximumMediaItems) {
-        throw_request_error(ninfer::RequestError(RequestErrorKind::MediaBudgetExceeded,
-                                                 "request exceeds the 16-item media limit"));
     }
     prepared.lifetime = acquire_request_lifetime();
     HostInputLease host_input;
@@ -351,7 +345,8 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
     }
 
     try {
-        std::size_t remaining_media_bytes = options_.max_request_bytes;
+        std::size_t remaining_media_bytes =
+            std::min(options_.max_request_bytes, ninfer::kMaximumPromptMediaBytes);
         ninfer::PromptInput input =
             to_prompt_input(request, semantics, [&](const ContentPart& part) {
                 return acquire_media(part, prepared.lifetime->deadline, is_cancelled,
@@ -374,15 +369,10 @@ PreparedRequest GenerationService::prepare(const GenerationRequest& request,
 
 int GenerationService::count_prompt_tokens(const GenerationRequest& request,
                                            std::function<bool()> is_cancelled) const {
-    const std::size_t media_items = request.media_item_count();
-    const bool request_has_media  = media_items != 0;
+    const bool request_has_media = request.media_item_count() != 0;
     if (request_has_media && !options_.enable_vision) {
         const std::invalid_argument error("Vision is disabled for this server");
         throw_invalid_input(error, "vision_disabled");
-    }
-    if (media_items > kMaximumMediaItems) {
-        throw_request_error(ninfer::RequestError(RequestErrorKind::MediaBudgetExceeded,
-                                                 "request exceeds the 16-item media limit"));
     }
     const Clock::time_point deadline =
         Clock::now() + std::chrono::milliseconds(options_.pending_timeout_ms);
@@ -391,7 +381,8 @@ int GenerationService::count_prompt_tokens(const GenerationRequest& request,
     HostInputLease host_input;
     if (request_has_media) { host_input = acquire_media_input(deadline, is_cancelled); }
     try {
-        std::size_t remaining_media_bytes = options_.max_request_bytes;
+        std::size_t remaining_media_bytes =
+            std::min(options_.max_request_bytes, ninfer::kMaximumPromptMediaBytes);
         ninfer::PromptInput input =
             to_prompt_input(request, semantics, [&](const ContentPart& part) {
                 return acquire_media(part, deadline, is_cancelled, remaining_media_bytes);

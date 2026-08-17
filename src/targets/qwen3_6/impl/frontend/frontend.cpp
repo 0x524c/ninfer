@@ -859,6 +859,7 @@ PreparedPrompt Frontend::prepare(PromptInput input) const {
             result.vision_items.push_back(convert_vision_item(std::move(item)));
         }
         result.prepare.media_items         = processed.stats.media_items;
+        result.prepare.media_bytes         = processed.stats.media_bytes;
         result.prepare.raw_patches         = processed.stats.raw_patches;
         result.prepare.vision_tokens       = processed.stats.vision_tokens;
         result.prepare.attention_pairs     = processed.stats.attention_pairs;

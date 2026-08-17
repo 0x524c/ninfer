@@ -58,6 +58,7 @@ struct VisionItem {
 
 struct PreprocessStats {
     std::size_t media_items       = 0;
+    std::size_t media_bytes       = 0;
     std::uint64_t raw_patches     = 0;
     std::uint64_t vision_tokens   = 0;
     std::uint64_t attention_pairs = 0;
@@ -68,16 +69,17 @@ struct PreprocessStats {
 };
 
 struct ProcessorOptions {
-    std::uint64_t image_min_pixels         = 32ULL * 32ULL;
-    std::uint64_t image_max_pixels         = 1024ULL * 1024ULL;
-    std::uint64_t video_min_pixels         = 128ULL * 32ULL * 32ULL;
-    std::uint64_t video_max_pixels         = 4ULL * 1024ULL * 1024ULL;
-    std::size_t max_media_bytes            = 256ULL << 20;
+    std::uint64_t image_min_pixels = 32ULL * 32ULL;
+    std::uint64_t image_max_pixels = 1024ULL * 1024ULL;
+    std::uint64_t video_min_pixels = 128ULL * 32ULL * 32ULL;
+    std::uint64_t video_max_pixels = 4ULL * 1024ULL * 1024ULL;
+    // Encoded bytes are aggregate per prompt. Decode limits are per item because media is
+    // processed serially, so they bound peak decode memory rather than retained input.
+    std::size_t max_encoded_media_bytes    = kMaximumPromptMediaBytes;
     std::uint64_t max_decoded_pixels       = 64ULL * 1024ULL * 1024ULL;
     std::uint64_t max_decoded_video_pixels = 128ULL * 1024ULL * 1024ULL;
     int max_video_source_frames            = 100'000;
     double max_video_duration_seconds      = 600.0;
-    std::size_t max_media_items            = 16;
     std::uint64_t max_raw_patches          = 131'072;
     std::uint64_t max_vision_tokens        = 32'768;
     double video_fps                       = 2.0;

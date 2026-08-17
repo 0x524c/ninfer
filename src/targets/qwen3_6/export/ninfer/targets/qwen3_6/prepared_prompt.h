@@ -57,6 +57,7 @@ struct PromptIdentity {
 struct PrepareStats {
     double seconds                = 0.0;
     std::size_t media_items       = 0;
+    std::size_t media_bytes       = 0;
     std::uint64_t raw_patches     = 0;
     std::uint64_t vision_tokens   = 0;
     std::uint64_t attention_pairs = 0; // Informational; not enforced against any budget.
