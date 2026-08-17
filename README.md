@@ -29,29 +29,28 @@ and serving routes.
 ## Performance
 
 The published measurements cover the three Qwen3.6 artifact profiles and the Qwen3.8-27B NVFP4
-MTP3 serving corpus. The Qwen3.8-27B `groupwise-int` profile is supported by current NInfer builds
-but is not yet included in a published benchmark campaign.
+profile. The Qwen3.8-27B `groupwise-int` profile is supported by current NInfer builds but is not
+yet included in a published benchmark campaign.
 
 ### Concurrent MTP3 decode
 
 Saturated decode was measured on an RTX 5090 with INT8 group-64 KV cache, CUDA Graphs, MTP3, and
 one 8,192-token generation per active request. The values below are aggregate committed decode
 throughput from complete one-second intervals in which the actual decode batch remained equal to
-the configured concurrency. Each profile should be read independently.
+the configured concurrency. MTP acceptance is aggregated over the complete request wave. Each
+concurrency cell reports `decode tok/s / MTP acceptance`; profiles should be read independently.
 
-| Model profile | C=1 | C=2 | C=4 | C=8 | C8 / C1 |
+| Model profile | C=1 tok/s / accept | C=2 tok/s / accept | C=4 tok/s / accept | C=8 tok/s / accept | C8 / C1 |
 |---|---:|---:|---:|---:|---:|
-| Qwen3.6-27B `groupwise-int` | 185.8 tok/s | 247.0 tok/s | 309.5 tok/s | 535.0 tok/s | 2.88× |
-| Qwen3.6-27B `nvfp4` | 202.4 tok/s | 399.7 tok/s | 699.7 tok/s | 1,146.9 tok/s | 5.67× |
-| Qwen3.6-35B-A3B `groupwise-int` | 593.0 tok/s | 877.7 tok/s | 1,166.0 tok/s | 1,313.8 tok/s | 2.22× |
+| Qwen3.6-27B `groupwise-int` | 185.8 / 68.2% | 247.0 / 69.0% | 309.5 / 68.4% | 535.0 / 68.3% | 2.88× |
+| Qwen3.6-27B `nvfp4` | 202.4 / 69.3% | 399.7 / 71.4% | 699.7 / 69.3% | 1,146.9 / 68.6% | 5.67× |
+| Qwen3.6-35B-A3B `groupwise-int` | 593.0 / 67.2% | 877.7 / 68.2% | 1,166.0 / 69.8% | 1,313.8 / 67.3% | 2.22× |
+| Qwen3.8-27B `nvfp4` | 143.8 / 48.9% | 267.6 / 48.1% | 461.1 / 45.8% | 766.6 / 46.0% | 5.33× |
 
-At C=8, Qwen3.6-35B-A3B reaches **1,313.8 aggregate decode tok/s**. The 27B NVFP4 profile reaches
-**1,146.9 tok/s** and **5.67×** its C=1 throughput.
-
-Qwen3.8-27B NVFP4 was measured with the fixed 75-request corpus rather than a saturated wave. Its
-complete-corpus makespan was **4,670.27 s**, **2,510.78 s**, **1,647.74 s**, and **2,164.90 s** at
-C=1, 2, 4, and 8, respectively. C=4 is fastest; memory pressure limits C=8. These complete-corpus
-figures are not directly comparable with the saturated-decode table above.
+At C=8, Qwen3.6-35B-A3B reaches **1,313.8 aggregate decode tok/s**. Qwen3.6-27B NVFP4 reaches
+**1,146.9 tok/s** and **5.67×** its C=1 throughput. Qwen3.8-27B NVFP4 has **45.8–48.9%** MTP
+acceptance, versus **67.2–71.4%** across the other measured profiles, so aggregate committed
+throughput reflects both execution performance and speculative acceptance.
 
 ### Single-request serving
 
@@ -59,7 +58,8 @@ The single-request corpus was measured on the same GPU with INT8 group-64 KV cac
 and a 1,024-token prefill chunk. Each reported fixture uses five fixed seeds after server warm-up.
 Targets and weight profiles are reported independently rather than as cross-target comparisons.
 Requests were submitted serially to a persistent server; for Qwen3.8-27B NVFP4, these results come
-from the C=1 point of the fixed concurrent-corpus campaign above.
+from the C=1 point of the fixed concurrent-corpus campaign documented in
+[Performance](docs/performance.md).
 
 **Qwen3.6-35B-A3B**
 
