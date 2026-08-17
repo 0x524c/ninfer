@@ -28,9 +28,9 @@ and serving routes.
 
 ## Performance
 
-The published measurements currently cover the three Qwen3.6 artifact profiles. Both registered
-Qwen3.8-27B profiles are supported by current NInfer builds but are not yet included in the
-benchmark campaign.
+The published measurements cover the three Qwen3.6 artifact profiles and the Qwen3.8-27B NVFP4
+MTP3 serving corpus. The Qwen3.8-27B `groupwise-int` profile is supported by current NInfer builds
+but is not yet included in a published benchmark campaign.
 
 ### Concurrent MTP3 decode
 
@@ -48,13 +48,30 @@ the configured concurrency. Each profile should be read independently.
 At C=8, Qwen3.6-35B-A3B reaches **1,313.8 aggregate decode tok/s**. The 27B NVFP4 profile reaches
 **1,146.9 tok/s** and **5.67×** its C=1 throughput.
 
+### Qwen3.8-27B NVFP4 concurrent MTP3 corpus
+
+The fixed 75-request speculative-decode corpus was also measured for Qwen3.8-27B NVFP4. Each point
+starts a fresh server with exactly C persistent clients; C=1 is the serial single-request corpus.
+Makespan covers release of the first request through receipt of the final response, including
+prefill, decode, workload transitions, and final drain.
+
+| C | Makespan | Requests/s | Decode tok/s | Avg batch | Speedup vs. C1 |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 4,670.27 s | 0.0161 | 161.1 | 1.00 | 1.00× |
+| 2 | 2,510.78 s | 0.0299 | 294.7 | 1.98 | 1.86× |
+| 4 | 1,647.74 s | 0.0455 | 432.9 | 3.29 | 2.83× |
+| 8 | 2,164.90 s | 0.0346 | 334.2 | 2.36 | 2.16× |
+
+C=4 gives the shortest complete-corpus makespan. C=8 is limited by memory pressure, which constrains
+the realized average batch to 2.36 and makes the complete-corpus result slower than C=4.
+
 ### Single-request serving
 
 The single-request corpus was measured on the same GPU with INT8 group-64 KV cache, CUDA Graphs,
 and a 1,024-token prefill chunk. Each reported fixture uses five fixed seeds after server warm-up.
-The two measured targets are reported independently and are not cross-target comparisons. The two
-27B weight profiles are reported separately. Requests were submitted serially to a persistent
-server.
+Targets and weight profiles are reported independently rather than as cross-target comparisons.
+Requests were submitted serially to a persistent server; for Qwen3.8-27B NVFP4, these results come
+from the C=1 point of the fixed concurrent-corpus campaign above.
 
 **Qwen3.6-35B-A3B**
 
@@ -79,6 +96,11 @@ server.
 - Against groupwise-int on the same corpus and runtime options: **3.48× the 7,680-token prefill
   throughput**, **1.55× the 260,096-token prefill throughput**, and **30–32% higher MTP3 decode
   throughput**.
+
+**Qwen3.8-27B (`nvfp4`)**
+
+- MTP3 long reasoning: **151.4–195.2 decode tok/s** with **56.2–76.0% acceptance**.
+- MTP3 structured output: **219.8 decode tok/s**, **90.8% acceptance**, and **3.72 tokens/round**.
 
 See [Performance](docs/performance.md) for the full methodology, variability, reproduction command,
 and per-fixture results.

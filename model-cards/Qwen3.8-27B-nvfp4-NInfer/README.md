@@ -110,6 +110,60 @@ The artifact supports:
 - the NInfer CLI;
 - OpenAI Responses Core, OpenAI Chat Completions, and Anthropic Messages serving.
 
+## Performance
+
+The measurements below were collected at NInfer revision
+[`32c9881`](https://github.com/Neroued/ninfer/commit/32c9881b6783949df4999422a764b3dcaa111b13)
+on one NVIDIA GeForce RTX 5090 with CUDA 13.1 compile/runtime and CUDA driver API 13.3. The server
+used MTP3, stochastic sampling, INT8 group-64 KV, CUDA Graphs, a 1,024-token prefill chunk, a
+131,072-token per-request context limit, and prefix reuse disabled.
+
+### Concurrent MTP=3 corpus makespan
+
+The fixed corpus contains three long-reasoning and twelve cross-scenario fixtures with five seeds
+each, for 75 requests. Every concurrency point starts a fresh server and uses the same shuffle seed
+and ordered HTTP send sequence. C=1 is the serial single-request corpus. Makespan includes prefill,
+decode, workload transitions, and final drain.
+
+| C | Requests | Decode tokens | Makespan | Requests/s | Decode tok/s | Avg batch | MTP acceptance | Speedup |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 75 | 752,160 | 4,670.27 s | 0.0161 | 161.1 | 1.00 | 60.8% | 1.00× |
+| 2 | 75 | 739,951 | 2,510.78 s | 0.0299 | 294.7 | 1.98 | 59.2% | 1.86× |
+| 4 | 75 | 713,384 | 1,647.74 s | 0.0455 | 432.9 | 3.29 | 58.0% | 2.83× |
+| 8 | 75 | 723,602 | 2,164.90 s | 0.0346 | 334.2 | 2.36 | 57.6% | 2.16× |
+
+All 300 requests completed without a request, CUDA, or out-of-memory failure. C=4 gives the
+shortest complete-corpus makespan. C=8 is limited by memory pressure, which makes its
+complete-corpus result slower than C=4. Sampling is stochastic, so the fixed prompts and seeds do
+not imply token-identical continuations across concurrency-specific numerical routes; exact
+decode-token totals are shown above.
+
+### MTP=3 single-request long-reasoning decode
+
+The C=1 point supplies five samples for each fixture. Values are arithmetic mean ± sample standard
+deviation from server phase timings and speculative counters.
+
+| AIME 2026 fixture | Completion tokens | Decode tok/s | MTP acceptance | MTP tokens/round |
+|---|---:|---:|---:|---:|
+| Problem 1 | 1,465.4 ± 417.3 | 195.2 ± 4.6 | 76.0% ± 2.4% | 3.28 ± 0.07 |
+| Problem 15 | 65,414.4 ± 271.9 | 151.4 ± 2.0 | 56.2% ± 1.1% | 2.69 ± 0.03 |
+| Problem 30 | 50,023.4 ± 14,839.1 | 167.5 ± 23.7 | 64.6% ± 14.9% | 2.94 ± 0.45 |
+
+### MTP=3 single-request cross-scenario decode
+
+Each category contains three fixtures and five seeds per fixture, for 15 samples.
+
+| Category | Decode tok/s | MTP acceptance | MTP tokens/round |
+|---|---:|---:|---:|
+| Code | 194.3 ± 6.1 | 76.4% ± 3.9% | 3.29 ± 0.12 |
+| Story | 126.1 ± 10.9 | 37.4% ± 5.8% | 2.12 ± 0.17 |
+| Translation | 192.3 ± 11.9 | 75.0% ± 6.5% | 3.25 ± 0.19 |
+| Structured output | 219.8 ± 8.6 | 90.8% ± 5.1% | 3.72 ± 0.15 |
+
+See the
+[full methodology and results](https://github.com/Neroued/ninfer/blob/master/docs/performance.md)
+for metric definitions and the exact reproduction command.
+
 ## Limits
 
 - The artifact is accepted only by NInfer revision `5d2c1f5` or later and the matching registered
