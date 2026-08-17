@@ -206,7 +206,7 @@ public:
         auto receive = [&] {
             while (true) {
                 const int rc = avcodec_receive_frame(codec_, frame_);
-                if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) { return; }
+                if (rc == AVERROR(EAGAIN) || rc == AVERROR_EOF) { return true; }
                 if (rc < 0) {
                     throw std::runtime_error("failed to decode media frame: " + av_error(rc));
                 }
@@ -218,8 +218,9 @@ public:
                                                  av_error(crop));
                     }
                 }
-                callback(index++, frame_);
+                const bool keep_decoding = callback(index++, frame_);
                 av_frame_unref(frame_);
+                if (!keep_decoding) { return false; }
             }
         };
         while (true) {
@@ -232,7 +233,10 @@ public:
                     av_packet_unref(packet_);
                     throw std::runtime_error("failed to submit media packet: " + av_error(send));
                 }
-                receive();
+                if (!receive()) {
+                    av_packet_unref(packet_);
+                    return;
+                }
             }
             av_packet_unref(packet_);
         }
@@ -240,7 +244,7 @@ public:
         if (flush < 0 && flush != AVERROR_EOF) {
             throw std::runtime_error("failed to flush media decoder: " + av_error(flush));
         }
-        receive();
+        (void)receive();
     }
 
     Image rgb(const AVFrame* frame, int orientation, bool composite_alpha = false) {
@@ -383,11 +387,13 @@ int count_frames(std::span<const std::uint8_t> input, const Policy& policy) {
     Decoder decoder(input, policy.max_decoded_pixels);
     int count = 0;
     decoder.frames([&](int index, const AVFrame*) {
+        if (policy.checkpoint) { policy.checkpoint(); }
         count = index + 1;
         if (count > policy.max_video_source_frames) {
             throw Error(ErrorKind::BudgetExceeded,
                         "video source frame count exceeds processor limit");
         }
+        return true;
     });
     return count;
 }
@@ -416,6 +422,7 @@ std::vector<int> sample_indices(int total, double source_fps, double target_fps,
 
 Image decode_image(std::span<const std::uint8_t> bytes, const Policy& policy) {
     validate_input(bytes, policy);
+    if (policy.checkpoint) { policy.checkpoint(); }
     Decoder decoder(bytes, policy.max_decoded_pixels);
     int orientation = exif_orientation(bytes);
     if (orientation == 1) {
@@ -423,7 +430,12 @@ Image decode_image(std::span<const std::uint8_t> bytes, const Policy& policy) {
     }
     Image result;
     decoder.frames([&](int index, const AVFrame* frame) {
-        if (index == 0) { result = decoder.rgb(frame, orientation); }
+        if (policy.checkpoint) { policy.checkpoint(); }
+        if (index == 0) {
+            result = decoder.rgb(frame, orientation);
+            return false;
+        }
+        return true;
     });
     if (result.rgb.empty()) { throw std::invalid_argument("image contains no decoded frame"); }
     return result;
@@ -432,6 +444,7 @@ Image decode_image(std::span<const std::uint8_t> bytes, const Policy& policy) {
 Video decode_video(std::span<const std::uint8_t> bytes, const Policy& policy, double target_fps,
                    int min_frames, int max_frames) {
     validate_input(bytes, policy);
+    if (policy.checkpoint) { policy.checkpoint(); }
     Decoder probe(bytes, policy.max_decoded_pixels);
     const double fps      = fps_of(probe.stream());
     int total             = probe.stream()->nb_frames > 0 &&
@@ -468,6 +481,7 @@ Video decode_video(std::span<const std::uint8_t> bytes, const Policy& policy, do
     int decoded                   = 0;
     std::uint64_t retained_pixels = 0;
     decoder.frames([&](int index, const AVFrame* frame) {
+        if (policy.checkpoint) { policy.checkpoint(); }
         decoded = index + 1;
         if (wanted < indices.size() && index == indices[wanted]) {
             const std::uint64_t pixels = static_cast<std::uint64_t>(std::max(frame->width, 0)) *
@@ -481,6 +495,7 @@ Video decode_video(std::span<const std::uint8_t> bytes, const Policy& policy, do
             out.frames.push_back(decoder.rgb(frame, orientation, true));
             ++wanted;
         }
+        return wanted != indices.size();
     });
     const std::size_t required = static_cast<std::size_t>(std::min(min_frames, total));
     if (out.frames.size() < required) {
