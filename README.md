@@ -48,22 +48,10 @@ the configured concurrency. Each profile should be read independently.
 At C=8, Qwen3.6-35B-A3B reaches **1,313.8 aggregate decode tok/s**. The 27B NVFP4 profile reaches
 **1,146.9 tok/s** and **5.67×** its C=1 throughput.
 
-### Qwen3.8-27B NVFP4 concurrent MTP3 corpus
-
-The fixed 75-request speculative-decode corpus was also measured for Qwen3.8-27B NVFP4. Each point
-starts a fresh server with exactly C persistent clients; C=1 is the serial single-request corpus.
-Makespan covers release of the first request through receipt of the final response, including
-prefill, decode, workload transitions, and final drain.
-
-| C | Makespan | Requests/s | Decode tok/s | Avg batch | Speedup vs. C1 |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 4,670.27 s | 0.0161 | 161.1 | 1.00 | 1.00× |
-| 2 | 2,510.78 s | 0.0299 | 294.7 | 1.98 | 1.86× |
-| 4 | 1,647.74 s | 0.0455 | 432.9 | 3.29 | 2.83× |
-| 8 | 2,164.90 s | 0.0346 | 334.2 | 2.36 | 2.16× |
-
-C=4 gives the shortest complete-corpus makespan. C=8 is limited by memory pressure, which constrains
-the realized average batch to 2.36 and makes the complete-corpus result slower than C=4.
+Qwen3.8-27B NVFP4 was measured with the fixed 75-request corpus rather than a saturated wave. Its
+complete-corpus makespan was **4,670.27 s**, **2,510.78 s**, **1,647.74 s**, and **2,164.90 s** at
+C=1, 2, 4, and 8, respectively. C=4 is fastest; memory pressure limits C=8. These complete-corpus
+figures are not directly comparable with the saturated-decode table above.
 
 ### Single-request serving
 
