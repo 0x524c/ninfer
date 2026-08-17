@@ -112,11 +112,14 @@ The artifact supports:
 
 ## Performance
 
-The measurements below were collected at NInfer revision
-[`32c9881`](https://github.com/Neroued/ninfer/commit/32c9881b6783949df4999422a764b3dcaa111b13)
-on one NVIDIA GeForce RTX 5090 with CUDA 13.1 compile/runtime and CUDA driver API 13.3. The server
-used MTP3, stochastic sampling, INT8 group-64 KV, CUDA Graphs, a 1,024-token prefill chunk, a
-131,072-token per-request context limit, and prefix reuse disabled.
+The MTP0 measurements below were collected at NInfer revision
+[`f08597d`](https://github.com/Neroued/ninfer/commit/f08597d6eaafce5b875934aaa85854fcd5426df8),
+and the MTP3 measurements at revision
+[`32c9881`](https://github.com/Neroued/ninfer/commit/32c9881b6783949df4999422a764b3dcaa111b13).
+Both campaigns used one NVIDIA GeForce RTX 5090, CUDA 13.1 compile/runtime, CUDA driver API 13.3,
+stochastic sampling, INT8 group-64 KV, CUDA Graphs, a 1,024-token prefill chunk, and prefix reuse
+disabled. MTP0 used no speculative backend and a 262,144-token context limit; MTP3 used a
+131,072-token per-request context limit and three draft tokens.
 
 ### Concurrent MTP=3 corpus makespan
 
@@ -137,6 +140,18 @@ shortest complete-corpus makespan. C=8 is limited by memory pressure, which make
 complete-corpus result slower than C=4. Sampling is stochastic, so the fixed prompts and seeds do
 not imply token-identical continuations across concurrency-specific numerical routes; exact
 decode-token totals are shown above.
+
+### Long-context baseline (MTP disabled)
+
+Each value is the arithmetic mean ± sample standard deviation over five fixed seeds after server
+warm-up.
+
+| Prompt tokens | Prefill tok/s | Server TTFT (ms) | Decode tok/s |
+|---:|---:|---:|---:|
+| 7,680 | 8,340.4 ± 13.0 | 931.6 ± 1.6 | 71.2 ± 0.1 |
+| 64,512 | 5,297.9 ± 259.2 | 12,281.1 ± 561.5 | 65.7 ± 0.8 |
+| 130,048 | 3,544.7 ± 25.3 | 36,853.5 ± 259.4 | 59.6 ± 0.9 |
+| 260,096 | 2,203.1 ± 13.4 | 118,354.8 ± 717.2 | 52.9 ± 2.3 |
 
 ### MTP=3 single-request long-reasoning decode
 

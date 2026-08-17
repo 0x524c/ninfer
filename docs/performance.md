@@ -2,6 +2,8 @@
 
 Tested Git revisions:
 
+- Qwen3.8-27B NVFP4 MTP0 context-length serving:
+  `f08597d6eaafce5b875934aaa85854fcd5426df8`;
 - Qwen3.8-27B NVFP4 MTP3 single-request and concurrent fixed-corpus serving:
   `32c9881b6783949df4999422a764b3dcaa111b13`;
 - Concurrent MTP3 decode saturation for the three measured Qwen3.6 artifact profiles:
@@ -22,9 +24,10 @@ The Qwen3.6 measurements characterize its three registered artifact profiles ind
 NVIDIA GeForce RTX 5090. They cover long-context prefill and baseline decode with speculative
 decoding disabled, plus long-reasoning and cross-scenario decode with MTP and DFlash. The Qwen3.6
 concurrent decode-saturation campaign measures all three profiles at C=1, 2, 4, and 8. The
-Qwen3.8-27B NVFP4 campaign covers the complete MTP3 speculative-decode corpus at C=1, 2, 4, and 8;
-its C=1 point also supplies the single-request MTP3 results below. The registered Qwen3.8-27B
-`groupwise-int` profile remains outside the published benchmark campaign.
+Qwen3.8-27B NVFP4 campaign covers the MTP0 long-context profile and the complete MTP3
+speculative-decode corpus at C=1, 2, 4, and 8; its C=1 point also supplies the single-request MTP3
+results below. The registered Qwen3.8-27B `groupwise-int` profile remains outside the published
+benchmark campaign.
 
 The single-request corpus requests were submitted serially to a persistent `ninfer-serve` process
 over the loopback OpenAI-compatible HTTP endpoint. Each reported corpus fixture used five fixed
@@ -189,6 +192,12 @@ python3 tools/bench/run_serve_concurrency.py \
   --mode mtp3 --suite corpus-makespan --concurrency 1 \
   --max-context 131072 --kv-capacity auto \
   --output profiles/bench/concurrent_corpus_27b_nvfp4_mtp3_20260811
+
+python3 tools/bench/run_serve_corpus.py \
+  --serve build/apps/ninfer-serve \
+  --artifact qwen3_8_27b=out/qwen3_8_27b_nvfp4.ninfer \
+  --mode mtp0 --sampling stochastic \
+  --output profiles/bench/serve_corpus_qwen3_8_27b_nvfp4_mtp0_20260817
 
 python3 tools/bench/run_serve_concurrency.py \
   --serve build/apps/ninfer-serve \
@@ -514,10 +523,20 @@ No per-scenario baseline/speculative speedup is reported.
 
 ### `nvfp4`
 
-The C=1 point of the fixed-corpus campaign is a serial run of the same three long-reasoning and
-twelve cross-scenario fixtures used by the single-request method. Each fixture has five fixed
-seeds. The tables report arithmetic mean ± sample standard deviation from the server's per-request
-phase timings and speculative counters.
+The MTP0 table comes from the serial Long NIAH campaign described by the single-request method. The
+MTP3 tables come from the C=1 point of the fixed concurrent-corpus campaign, which serially runs the
+same three long-reasoning and twelve cross-scenario fixtures. Each fixture has five fixed seeds. The
+tables report arithmetic mean ± sample standard deviation from the server's per-request phase
+timings and speculative counters.
+
+#### MTP0 context-length profile
+
+| Prompt tokens | Samples | Prefill tok/s | Server TTFT (ms) | Decode tok/s |
+|---:|---:|---:|---:|---:|
+| 7,680 | 5 | 8,340.4 ± 13.0 | 931.6 ± 1.6 | 71.2 ± 0.1 |
+| 64,512 | 5 | 5,297.9 ± 259.2 | 12,281.1 ± 561.5 | 65.7 ± 0.8 |
+| 130,048 | 5 | 3,544.7 ± 25.3 | 36,853.5 ± 259.4 | 59.6 ± 0.9 |
+| 260,096 | 5 | 2,203.1 ± 13.4 | 118,354.8 ± 717.2 | 52.9 ± 2.3 |
 
 #### MTP3 long-reasoning decode
 

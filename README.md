@@ -57,9 +57,9 @@ throughput reflects both execution performance and speculative acceptance.
 The single-request corpus was measured on the same GPU with INT8 group-64 KV cache, CUDA Graphs,
 and a 1,024-token prefill chunk. Each reported fixture uses five fixed seeds after server warm-up.
 Targets and weight profiles are reported independently rather than as cross-target comparisons.
-Requests were submitted serially to a persistent server; for Qwen3.8-27B NVFP4, these results come
-from the C=1 point of the fixed concurrent-corpus campaign documented in
-[Performance](docs/performance.md).
+Requests were submitted serially to a persistent server. The Qwen3.8-27B NVFP4 MTP0 results use the
+same dedicated serial corpus runner as the Qwen3.6 profiles; its MTP3 results come from the C=1 point
+of the fixed concurrent-corpus campaign documented in [Performance](docs/performance.md).
 
 **Qwen3.6-35B-A3B**
 
@@ -87,6 +87,8 @@ from the C=1 point of the fixed concurrent-corpus campaign documented in
 
 **Qwen3.8-27B (`nvfp4`)**
 
+- MTP0 at a 7,680-token prompt: **8,340.4 prefill tok/s** and **71.2 decode tok/s**.
+- MTP0 at a 260,096-token prompt: **2,203.1 prefill tok/s** and **52.9 decode tok/s**.
 - MTP3 long reasoning: **151.4–195.2 decode tok/s** with **56.2–76.0% acceptance**.
 - MTP3 structured output: **219.8 decode tok/s**, **90.8% acceptance**, and **3.72 tokens/round**.
 
