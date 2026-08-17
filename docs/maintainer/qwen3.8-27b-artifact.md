@@ -5,9 +5,9 @@ inventory, shapes, numeric formats, storage layouts, fused row order, aliases, f
 source-to-object transforms. The existing registered `qwen3.8-27b/groupwise-int` contract remains
 defined in Section 13.
 
-The NVFP4 profile is the normative target for the converter and target binder that will implement
-it. It is not a registered Engine identity until those implementations land and the generic
-artifact registry is updated. Common framing is defined in
+The NVFP4 profile is a registered Engine identity implemented by the target converter, exact
+binder, and Qwen3.8 execution leaves. The generic artifact registry resolves its version-2
+identity without a runtime profile flag. Common framing is defined in
 [`artifact-container.md`](artifact-container.md), numeric semantics in
 [`tensor-formats.md`](tensor-formats.md), byte packing in
 [`storage-layouts.md`](storage-layouts.md), and model mathematics and state behavior in
@@ -736,8 +736,8 @@ counts are:
 layers use the registered Q4/Q5 allocation; the optimized draft head uses Q4; MTP matrices and
 the Vision merger use W8; and the Vision patch projection uses Q6. All groupwise integer tensors
 use `MAXABS_F16_RECIP_RNE_V1` with `row-split-k128-v1`. The artifact is produced solely from the
-official source revision in Section 10.1 and binds through the existing
-`GroupwiseIntW8Endpoints` profile.
+official source revision in Section 10.1 and binds through the `Qwen38GroupwiseInt` profile. Its
+registered NVFP4 peer binds through `Qwen38Nvfp4`.
 
 Its canonical conversion entry point remains:
 
