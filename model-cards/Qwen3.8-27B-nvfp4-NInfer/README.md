@@ -268,18 +268,24 @@ per problem with temperature 1.0, top-p 0.95, top-k 20, presence penalty 0.0, an
 suite ran at a 252,928-token context limit; the multimodal suite ran with `--vision` at a
 81,920-token limit.
 
-| Benchmark | Accuracy | Correct / total |
-|---|---:|---:|
-| IFBench (prompt-level strict) | 77.00% | 231 / 300 |
-| AIME 2025 | 96.67% | 29 / 30 |
-| AIME 2026 | 96.67% | 29 / 30 |
-| GPQA-Diamond | 90.40% | 179 / 198 |
-| ERQA | 66.25% | 265 / 400 |
-| RealWorldQA | 83.53% | 639 / 765 |
+| Benchmark | NInfer NVFP4 | Correct / total | Official Qwen3.8-27B BF16 |
+|---|---:|---:|---:|
+| IFBench (prompt-level strict) | 77.00% | 231 / 300 | 79.5 |
+| AIME 2025 | 96.67% | 29 / 30 | — |
+| AIME 2026 | 96.67% | 29 / 30 | — |
+| GPQA-Diamond | 90.40% | 179 / 198 | 89.2 |
+| ERQA | 66.25% | 265 / 400 | 65.5 |
+| RealWorldQA | 83.53% | 639 / 765 | 85.9 |
 
 All 1,723 configured samples completed and were scored. IFBench additionally reports 80.50%
 instruction-level strict, 80.33% prompt-level loose, and 83.50% instruction-level loose. These are
 single-sample results, not pass@k.
+
+The official Qwen3.8-27B BF16 figures come from the
+[upstream model card](https://huggingface.co/Qwen/Qwen3.8-27B); its sampling settings and IFBench
+metric level are not stated there, so the last column is not a same-protocol comparison. The NVFP4
+deltas stay within ±2.5 points on the four overlapping benchmarks, and the upstream card reports no
+AIME results.
 
 ## Limits
 
